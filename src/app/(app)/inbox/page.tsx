@@ -9,9 +9,10 @@ import { cn } from '@/lib/utils'
 import type { EmailThread } from '@/types/email'
 import { RefreshCw, SlidersHorizontal } from 'lucide-react'
 
-// Simple in-memory cache: cacheKey → { threads, timestamp }
-const threadCache = new Map<string, { threads: EmailThread[]; ts: number }>()
-const CACHE_TTL = 60_000 // 60 seconds
+// Module-level caches — survive tab switches within the session
+const threadCache = new Map<string, { threads: EmailThread[]; nextPageToken?: string; ts: number }>()
+const summaryCache = new Map<string, string>() // threadId → summary
+const CACHE_TTL = 60_000
 
 export default function InboxPage() {
   const accounts = useEmailStore(s => s.accounts)
@@ -41,56 +42,47 @@ export default function InboxPage() {
   const [sortByPriority, setSortByPriority] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [isLoadingMore, setIsLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
+  const nextPageTokenRef = useRef<string | undefined>()
   const prevSearchRef = useRef(searchQuery)
-  // Tracks thread IDs already queued for summarization — prevents the infinite loop
-  const summarizedRef = useRef(new Set<string>())
+  // Only tracks IDs queued this load batch — prevents redundant fetches
+  const pendingSummaryIds = useRef(new Set<string>())
 
   useEffect(() => {
-    if (prevSearchRef.current !== '' && searchQuery === '') {
-      setRefreshKey(k => k + 1)
-    }
+    if (prevSearchRef.current !== '' && searchQuery === '') setRefreshKey(k => k + 1)
     prevSearchRef.current = searchQuery
   }, [searchQuery])
 
   const isUnified = activeAccountId === null || activeAccountId === 'all'
-
   const cacheKey = `${activeAccountId ?? 'all'}::${activeLabel ?? 'inbox'}`
 
+  // ─── Load threads ──────────────────────────────────────────────────────────
   const loadThreads = useCallback(async (forceRefresh = false) => {
-    // Serve from cache if fresh
     if (!forceRefresh) {
       const cached = threadCache.get(cacheKey)
       if (cached && Date.now() - cached.ts < CACHE_TTL) {
         setThreads(cached.threads)
+        nextPageTokenRef.current = cached.nextPageToken
+        setHasMore(!!cached.nextPageToken)
         return
       }
     }
 
     setLoading(true)
     setLoadError(null)
+    pendingSummaryIds.current.clear()
+
     try {
-      const params = new URLSearchParams({ maxResults: '50' })
-
-      if (isUnified) {
-        params.set('unified', 'true')
-      } else {
-        if (!activeAccountId) return
-        params.set('accountId', activeAccountId)
-      }
-
-      if (activeLabel === 'starred') params.set('starred', 'true')
-      else if (activeLabel === 'archive') params.set('archived', 'true')
-      else if (activeLabel && activeLabel !== 'inbox') params.set('label', activeLabel)
-
+      const params = buildParams(50, undefined, isUnified, activeAccountId, activeLabel)
       const res = await fetch(`/api/emails?${params}`)
-      const data = await res.json() as { threads?: EmailThread[]; error?: string }
-      if (!res.ok || data.error) {
-        setLoadError(data.error ?? `Server error ${res.status}`)
-        setThreads([])
-        return
-      }
+      const data = await res.json() as { threads?: EmailThread[]; nextPageToken?: string; error?: string }
+      if (!res.ok || data.error) { setLoadError(data.error ?? `Error ${res.status}`); setThreads([]); return }
+
       const fresh = data.threads ?? []
-      threadCache.set(cacheKey, { threads: fresh, ts: Date.now() })
+      nextPageTokenRef.current = data.nextPageToken
+      setHasMore(!!data.nextPageToken)
+      threadCache.set(cacheKey, { threads: fresh, nextPageToken: data.nextPageToken, ts: Date.now() })
       setThreads(fresh)
     } catch (e) {
       setLoadError(String(e))
@@ -99,20 +91,45 @@ export default function InboxPage() {
     }
   }, [activeAccountId, activeLabel, isUnified, cacheKey, setLoading, setThreads])
 
-  // On tab/account change: load (cache-first). On manual refresh: force-reload.
-  useEffect(() => {
-    summarizedRef.current.clear()
-    loadThreads(refreshKey > 0)
-  }, [loadThreads, refreshKey])
+  useEffect(() => { loadThreads(refreshKey > 0) }, [loadThreads, refreshKey])
 
-  // Auto-summarize first 5 threads — guarded by ref to avoid re-firing on every updateThread
-  useEffect(() => {
-    if (threads.length === 0) return
-    const toSummarize = threads.filter(t => !t.aiSummary && !summarizedRef.current.has(t.id)).slice(0, 5)
-    if (toSummarize.length === 0) return
+  // ─── Load more (infinite scroll) ──────────────────────────────────────────
+  const loadMore = useCallback(async () => {
+    if (isLoadingMore || !nextPageTokenRef.current) return
+    setIsLoadingMore(true)
+    try {
+      const params = buildParams(50, nextPageTokenRef.current, isUnified, activeAccountId, activeLabel)
+      const res = await fetch(`/api/emails?${params}`)
+      const data = await res.json() as { threads?: EmailThread[]; nextPageToken?: string; error?: string }
+      if (!res.ok || data.error) return
 
-    toSummarize.forEach(thread => {
-      summarizedRef.current.add(thread.id) // mark before fetch — prevents re-queueing
+      const more = data.threads ?? []
+      nextPageTokenRef.current = data.nextPageToken
+      setHasMore(!!data.nextPageToken)
+
+      const merged = [...threads, ...more.filter(t => !threads.some(e => e.id === t.id))]
+      threadCache.set(cacheKey, { threads: merged, nextPageToken: data.nextPageToken, ts: Date.now() })
+      setThreads(merged)
+    } catch { /* silent */ } finally {
+      setIsLoadingMore(false)
+    }
+  }, [isLoadingMore, isUnified, activeAccountId, activeLabel, cacheKey, threads, setThreads])
+
+  // ─── Auto-summarize (cached, no infinite loop) ─────────────────────────────
+  useEffect(() => {
+    // First, apply any already-cached summaries immediately (no fetch needed)
+    threads.forEach(t => {
+      const cached = summaryCache.get(t.id)
+      if (cached && !t.aiSummary) updateThread({ ...t, aiSummary: cached })
+    })
+
+    // Then fetch for threads that have no summary and haven't been requested yet
+    const toFetch = threads
+      .filter(t => !t.aiSummary && !summaryCache.has(t.id) && !pendingSummaryIds.current.has(t.id))
+      .slice(0, 5)
+
+    toFetch.forEach(thread => {
+      pendingSummaryIds.current.add(thread.id)
       fetch('/api/ai/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -121,26 +138,20 @@ export default function InboxPage() {
         .then(r => r.json())
         .then((data: { summary?: string }) => {
           if (data.summary) {
+            summaryCache.set(thread.id, data.summary)
             updateThread({ ...thread, aiSummary: data.summary })
-            // Update cache too so summary survives tab switch
-            const cached = threadCache.get(cacheKey)
-            if (cached) {
-              cached.threads = cached.threads.map(t =>
-                t.id === thread.id ? { ...t, aiSummary: data.summary } : t
-              )
-            }
           }
         })
-        .catch(() => { summarizedRef.current.delete(thread.id) })
+        .catch(() => { pendingSummaryIds.current.delete(thread.id) })
     })
-  // Only re-run when the set of thread IDs changes, not on every updateThread call
+  // Only re-run when the set of thread IDs changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threads.map(t => t.id).join(',')])
 
+  // ─── Actions ───────────────────────────────────────────────────────────────
   function handleSelectThread(thread: EmailThread) {
     setSelectedThread(thread.id)
     if (!thread.isRead) {
-      // Optimistic — mark read immediately, fire API in background
       updateThread({ ...thread, isRead: true })
       fetch(`/api/emails/${thread.id}`, {
         method: 'PATCH',
@@ -150,20 +161,29 @@ export default function InboxPage() {
     }
   }
 
+  function invalidateCache() {
+    threadCache.delete(cacheKey)
+  }
+
   function handleArchive() {
     if (!selectedThread) return
-    // Optimistic removal
+    const isArchived = selectedThread.isArchived
     removeThread(selectedThread.id)
+    invalidateCache()
     fetch(`/api/emails/${selectedThread.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'archive', accountId: selectedThread.accountId }),
+      body: JSON.stringify({
+        action: isArchived ? 'unarchive' : 'archive',
+        accountId: selectedThread.accountId,
+      }),
     }).catch(() => {})
   }
 
   function handleDelete() {
     if (!selectedThread) return
     removeThread(selectedThread.id)
+    invalidateCache()
     fetch(`/api/emails/${selectedThread.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -175,25 +195,19 @@ export default function InboxPage() {
     const t = thread ?? selectedThread
     if (!t) return
     const starred = !t.isStarred
-
-    // Optimistic: in starred view, unstarring removes the thread immediately
     if (activeLabel === 'starred' && !starred) {
       removeThread(t.id)
+      invalidateCache()
     } else {
       updateThread({ ...t, isStarred: starred })
     }
-
     fetch(`/api/emails/${t.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'star', accountId: t.accountId, value: starred }),
     }).catch(() => {
-      // Revert on failure
-      if (activeLabel === 'starred' && !starred) {
-        updateThread({ ...t, isStarred: true })
-      } else {
-        updateThread({ ...t, isStarred: !starred })
-      }
+      if (activeLabel === 'starred' && !starred) updateThread({ ...t, isStarred: true })
+      else updateThread({ ...t, isStarred: !starred })
     })
   }
 
@@ -210,10 +224,7 @@ export default function InboxPage() {
           </div>
           <h2 className="text-lg font-semibold text-gray-800 mb-2">No accounts connected</h2>
           <p className="text-sm text-gray-500 mb-6">Sign in with Gmail, Outlook, or IMAP to start reading your emails.</p>
-          <a
-            href="/login"
-            className="inline-block px-5 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
-          >
+          <a href="/login" className="inline-block px-5 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors">
             Sign in to get started
           </a>
         </div>
@@ -238,10 +249,7 @@ export default function InboxPage() {
           <div className="flex items-center gap-1">
             <button
               onClick={() => setSortByPriority(!sortByPriority)}
-              className={cn(
-                'p-1.5 rounded-lg text-xs transition-colors',
-                sortByPriority ? 'bg-blue-100 text-blue-600' : 'text-gray-400 hover:bg-gray-100'
-              )}
+              className={cn('p-1.5 rounded-lg text-xs transition-colors', sortByPriority ? 'bg-blue-100 text-blue-600' : 'text-gray-400 hover:bg-gray-100')}
               title="Sort by AI priority"
             >
               <SlidersHorizontal className="w-3.5 h-3.5" />
@@ -263,12 +271,7 @@ export default function InboxPage() {
             </div>
             <p className="text-sm font-medium text-gray-700 mb-1">Could not load emails</p>
             <p className="text-xs text-red-500 max-w-xs break-words">{loadError}</p>
-            <button
-              onClick={() => setRefreshKey(k => k + 1)}
-              className="mt-4 text-xs text-blue-600 hover:underline"
-            >
-              Try again
-            </button>
+            <button onClick={() => setRefreshKey(k => k + 1)} className="mt-4 text-xs text-blue-600 hover:underline">Try again</button>
           </div>
         ) : (
           <ThreadList
@@ -277,6 +280,9 @@ export default function InboxPage() {
             onSelect={handleSelectThread}
             onStar={handleStar}
             isLoading={isLoading}
+            hasMore={hasMore}
+            isLoadingMore={isLoadingMore}
+            onLoadMore={loadMore}
           />
         )}
       </div>
@@ -304,7 +310,6 @@ export default function InboxPage() {
         </div>
       )}
 
-      {/* Compose */}
       {showCompose && account && (
         <Compose
           account={account}
@@ -317,4 +322,21 @@ export default function InboxPage() {
       )}
     </div>
   )
+}
+
+function buildParams(
+  maxResults: number,
+  pageToken: string | undefined,
+  isUnified: boolean,
+  activeAccountId: string | null,
+  activeLabel: string | null,
+): URLSearchParams {
+  const params = new URLSearchParams({ maxResults: String(maxResults) })
+  if (isUnified) { params.set('unified', 'true') }
+  else if (activeAccountId) { params.set('accountId', activeAccountId) }
+  if (pageToken) params.set('pageToken', pageToken)
+  if (activeLabel === 'starred') params.set('starred', 'true')
+  else if (activeLabel === 'archive') params.set('archived', 'true')
+  else if (activeLabel && activeLabel !== 'inbox') params.set('label', activeLabel)
+  return params
 }

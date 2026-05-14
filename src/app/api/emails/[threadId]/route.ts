@@ -48,6 +48,7 @@ export async function PATCH(
   let result
   switch (body.action) {
     case 'archive': result = await adapter.archiveThread(threadId); break
+    case 'unarchive': result = await adapter.addLabel(threadId, 'INBOX'); break
     case 'delete': result = await adapter.deleteThread(threadId); break
     case 'markRead': result = await adapter.markRead(threadId, body.value ?? true); break
     case 'star': result = await adapter.starThread(threadId, body.value ?? true); break

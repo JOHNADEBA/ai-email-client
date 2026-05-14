@@ -5,7 +5,7 @@ import { formatDate, cn, categoryEmoji, priorityColor } from '@/lib/utils'
 import type { EmailThread } from '@/types/email'
 import { Button } from '@/components/ui/button'
 import {
-  Archive, Trash2, Star, Reply, Forward,
+  Archive, ArchiveRestore, Trash2, Star, Reply, Forward,
   Sparkles, ChevronDown, ChevronUp, ExternalLink, X
 } from 'lucide-react'
 
@@ -110,8 +110,8 @@ export function ThreadView({ thread, onArchive, onDelete, onStar, onReply, onFor
             )}
           </div>
           <div className="flex items-center gap-0.5 flex-shrink-0">
-            <Button variant="ghost" size="icon-sm" onClick={onArchive} title="Archive">
-              <Archive className="w-4 h-4" />
+            <Button variant="ghost" size="icon-sm" onClick={onArchive} title={thread.isArchived ? 'Unarchive' : 'Archive'}>
+              {thread.isArchived ? <ArchiveRestore className="w-4 h-4" /> : <Archive className="w-4 h-4" />}
             </Button>
             <Button variant="ghost" size="icon-sm" onClick={onDelete} title="Delete">
               <Trash2 className="w-4 h-4" />

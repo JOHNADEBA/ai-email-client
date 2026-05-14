@@ -1,8 +1,9 @@
 'use client'
 
+import { useEffect, useRef } from 'react'
 import { formatDate, cn, priorityColor, categoryEmoji } from '@/lib/utils'
 import type { EmailThread } from '@/types/email'
-import { Star, Paperclip } from 'lucide-react'
+import { Star, Paperclip, Loader2 } from 'lucide-react'
 
 interface ThreadListProps {
   threads: EmailThread[]
@@ -10,9 +11,31 @@ interface ThreadListProps {
   onSelect: (thread: EmailThread) => void
   onStar: (thread: EmailThread) => void
   isLoading?: boolean
+  hasMore?: boolean
+  isLoadingMore?: boolean
+  onLoadMore?: () => void
 }
 
-export function ThreadList({ threads, selectedId, onSelect, onStar, isLoading }: ThreadListProps) {
+export function ThreadList({
+  threads, selectedId, onSelect, onStar,
+  isLoading, hasMore, isLoadingMore, onLoadMore,
+}: ThreadListProps) {
+  const sentinelRef = useRef<HTMLDivElement>(null)
+
+  // Intersection observer — triggers onLoadMore when sentinel scrolls into view
+  useEffect(() => {
+    if (!onLoadMore || !hasMore) return
+    const el = sentinelRef.current
+    if (!el) return
+
+    const observer = new IntersectionObserver(
+      entries => { if (entries[0].isIntersecting) onLoadMore() },
+      { threshold: 0.1 }
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [hasMore, onLoadMore])
+
   if (isLoading) {
     return (
       <div className="flex-1 overflow-y-auto">
@@ -49,15 +72,22 @@ export function ThreadList({ threads, selectedId, onSelect, onStar, isLoading }:
           onStar={onStar}
         />
       ))}
+
+      {/* Infinite scroll sentinel */}
+      {hasMore && (
+        <div ref={sentinelRef} className="flex items-center justify-center py-4">
+          {isLoadingMore
+            ? <Loader2 className="w-4 h-4 text-gray-400 animate-spin" />
+            : <div className="h-4" />
+          }
+        </div>
+      )}
     </div>
   )
 }
 
 function ThreadItem({
-  thread,
-  isSelected,
-  onSelect,
-  onStar,
+  thread, isSelected, onSelect, onStar,
 }: {
   thread: EmailThread
   isSelected: boolean
@@ -82,7 +112,6 @@ function ThreadItem({
       aria-selected={isSelected}
     >
       <div className="flex items-start gap-2">
-        {/* Unread dot */}
         <div className={cn('w-2 h-2 rounded-full mt-1.5 flex-shrink-0', thread.isRead ? 'bg-transparent' : 'bg-blue-600')} />
 
         <div className="flex-1 min-w-0">
@@ -91,9 +120,7 @@ function ThreadItem({
               {senderNames}
             </span>
             <div className="flex items-center gap-1 flex-shrink-0">
-              {thread.messageCount > 1 && (
-                <span className="text-xs text-gray-400">{thread.messageCount}</span>
-              )}
+              {thread.messageCount > 1 && <span className="text-xs text-gray-400">{thread.messageCount}</span>}
               <span className="text-xs text-gray-400">{formatDate(thread.lastDate)}</span>
             </div>
           </div>
@@ -113,9 +140,7 @@ function ThreadItem({
                   P{thread.aiPriority}
                 </span>
               )}
-              {thread.aiCategory && (
-                <span className="text-xs">{categoryEmoji(thread.aiCategory)}</span>
-              )}
+              {thread.aiCategory && <span className="text-xs">{categoryEmoji(thread.aiCategory)}</span>}
               <button
                 className="p-0.5 hover:text-yellow-500 transition-colors"
                 onClick={e => { e.stopPropagation(); onStar(thread) }}
