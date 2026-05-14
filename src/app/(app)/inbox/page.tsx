@@ -253,7 +253,7 @@ export default function InboxPage() {
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100">
           <div>
             <h2 className="text-sm font-semibold text-gray-900 capitalize">
-              {isUnified ? 'All Inboxes' : (activeLabel ?? 'Inbox')}
+              {activeLabel ? activeLabel.replace(/_/g, ' ') : isUnified ? 'All Inboxes' : 'Inbox'}
             </h2>
             <p className="text-xs text-gray-400">{threads.length} threads</p>
           </div>
