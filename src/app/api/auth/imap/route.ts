@@ -3,6 +3,8 @@ import { ImapFlow } from 'imapflow'
 import { addAccountToSession } from '@/lib/auth/session'
 import type { EmailAccount, ImapConfig } from '@/types/email'
 
+export const maxDuration = 30 // seconds — override Vercel's 10s default
+
 const KNOWN_HOSTS: Record<string, Omit<ImapConfig, 'username' | 'password'>> = {
   'yahoo.com': { host: 'imap.mail.yahoo.com', port: 993, secure: true },
   'ymail.com': { host: 'imap.mail.yahoo.com', port: 993, secure: true },
@@ -47,6 +49,9 @@ export async function POST(request: NextRequest) {
       secure: imapConfig.secure,
       auth: { user: imapConfig.username, pass: imapConfig.password },
       logger: false,
+      connectionTimeout: 20000,
+      greetingTimeout: 10000,
+      socketTimeout: 20000,
     })
     await client.connect()
     const mailboxes = await client.list()

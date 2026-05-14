@@ -51,8 +51,11 @@ export default function LoginPage() {
       } else {
         window.location.href = '/inbox'
       }
-    } catch {
-      setError('Network error. Please try again.')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setError(msg.includes('timeout') || msg.includes('fetch')
+        ? 'Connection timed out. Check your credentials and try again.'
+        : 'Network error. Please try again.')
     } finally {
       setLoading(false)
     }
