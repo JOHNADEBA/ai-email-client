@@ -44,7 +44,7 @@ export default function InboxPage() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(false)
-  const nextPageTokenRef = useRef<string | undefined>()
+  const nextPageTokenRef = useRef<string | undefined>(undefined)
   const prevSearchRef = useRef(searchQuery)
   // Only tracks IDs queued this load batch — prevents redundant fetches
   const pendingSummaryIds = useRef(new Set<string>())
