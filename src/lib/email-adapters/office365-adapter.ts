@@ -88,16 +88,22 @@ export class Office365Adapter implements EmailAdapter {
 
       const qs = new URLSearchParams({
         $top: String(top),
-        $orderby: 'lastModifiedDateTime desc',
         $select: 'id,subject,from,toRecipients,receivedDateTime,bodyPreview,isRead,flag,categories,hasAttachments,conversationId',
       })
       if (params.pageToken) qs.set('$skip', params.pageToken)
       if (filters.length) qs.set('$filter', filters.join(' and '))
+      // $orderby conflicts with $filter on some folders — only add when not filtering
+      if (!filters.length) qs.set('$orderby', 'lastModifiedDateTime desc')
       if (q?.q) qs.set('$search', `"${q.q}"`)
 
-      // Archived emails live in the archive folder; starred/normal come from inbox (or allMessages for flagged)
-      const folder = q?.isArchived ? 'archive' : q?.isStarred ? 'allMessages' : 'inbox'
-      const data = await graphFetch(`/me/mailFolders/${folder}/messages?${qs}`, this.accessToken)
+      // Starred: use /me/messages (searches all folders, supports $filter without $orderby)
+      // Archived: use archive folder; default: inbox
+      let endpoint: string
+      if (q?.isStarred) endpoint = `/me/messages?${qs}`
+      else if (q?.isArchived) endpoint = `/me/mailFolders/archive/messages?${qs}`
+      else endpoint = `/me/mailFolders/inbox/messages?${qs}`
+
+      const data = await graphFetch(endpoint, this.accessToken)
       const messages: GraphMessage[] = data.value ?? []
 
       const byConversation = new Map<string, GraphMessage[]>()
