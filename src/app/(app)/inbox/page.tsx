@@ -13,6 +13,9 @@ import { RefreshCw, SlidersHorizontal } from 'lucide-react'
 const threadCache = new Map<string, { threads: EmailThread[]; nextPageToken?: string; ts: number }>()
 const summaryCache = new Map<string, string>() // threadId → summary
 const CACHE_TTL = 60_000
+// Client-side exclusions — prevent a just-mutated thread from re-appearing even if the
+// API hasn't propagated yet. Keyed by threadId, value = which views to hide it from.
+const pendingRemove = new Map<string, 'all' | 'non-archive' | 'archive'>()
 
 export default function InboxPage() {
   const accounts = useEmailStore(s => s.accounts)
@@ -79,7 +82,7 @@ export default function InboxPage() {
       const data = await res.json() as { threads?: EmailThread[]; nextPageToken?: string; error?: string }
       if (!res.ok || data.error) { setLoadError(data.error ?? `Error ${res.status}`); setThreads([]); return }
 
-      const fresh = data.threads ?? []
+      const fresh = filterPending(data.threads ?? [], activeLabel)
       nextPageTokenRef.current = data.nextPageToken
       setHasMore(!!data.nextPageToken)
       threadCache.set(cacheKey, { threads: fresh, nextPageToken: data.nextPageToken, ts: Date.now() })
@@ -91,7 +94,10 @@ export default function InboxPage() {
     }
   }, [activeAccountId, activeLabel, isUnified, cacheKey, setLoading, setThreads])
 
-  useEffect(() => { loadThreads(refreshKey > 0) }, [loadThreads, refreshKey])
+  useEffect(() => {
+    if (refreshKey > 0) pendingRemove.clear() // hard refresh clears client-side exclusions
+    loadThreads(refreshKey > 0)
+  }, [loadThreads, refreshKey])
 
   // ─── Load more (infinite scroll) ──────────────────────────────────────────
   const loadMore = useCallback(async () => {
@@ -103,7 +109,7 @@ export default function InboxPage() {
       const data = await res.json() as { threads?: EmailThread[]; nextPageToken?: string; error?: string }
       if (!res.ok || data.error) return
 
-      const more = data.threads ?? []
+      const more = filterPending(data.threads ?? [], activeLabel)
       nextPageTokenRef.current = data.nextPageToken
       setHasMore(!!data.nextPageToken)
 
@@ -161,15 +167,17 @@ export default function InboxPage() {
     }
   }
 
-  function invalidateCache() {
-    threadCache.delete(cacheKey)
+  function invalidateAllCaches() {
+    threadCache.clear() // force fresh fetch on every tab after a mutation
   }
 
   function handleArchive() {
     if (!selectedThread) return
     const isArchived = selectedThread.isArchived
     removeThread(selectedThread.id)
-    invalidateCache()
+    // Exclude from opposite view until API propagates
+    pendingRemove.set(selectedThread.id, isArchived ? 'archive' : 'non-archive')
+    invalidateAllCaches()
     fetch(`/api/emails/${selectedThread.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -183,7 +191,8 @@ export default function InboxPage() {
   function handleDelete() {
     if (!selectedThread) return
     removeThread(selectedThread.id)
-    invalidateCache()
+    pendingRemove.set(selectedThread.id, 'all')
+    invalidateAllCaches()
     fetch(`/api/emails/${selectedThread.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -197,7 +206,8 @@ export default function InboxPage() {
     const starred = !t.isStarred
     if (activeLabel === 'starred' && !starred) {
       removeThread(t.id)
-      invalidateCache()
+      pendingRemove.set(t.id, 'archive') // hide from starred (reuse 'archive' slot for starred tab)
+      invalidateAllCaches()
     } else {
       updateThread({ ...t, isStarred: starred })
     }
@@ -206,6 +216,7 @@ export default function InboxPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'star', accountId: t.accountId, value: starred }),
     }).catch(() => {
+      pendingRemove.delete(t.id)
       if (activeLabel === 'starred' && !starred) updateThread({ ...t, isStarred: true })
       else updateThread({ ...t, isStarred: !starred })
     })
@@ -322,6 +333,18 @@ export default function InboxPage() {
       )}
     </div>
   )
+}
+
+function filterPending(threads: EmailThread[], activeLabel: string | null): EmailThread[] {
+  if (pendingRemove.size === 0) return threads
+  return threads.filter(t => {
+    const rule = pendingRemove.get(t.id)
+    if (!rule) return true
+    if (rule === 'all') return false
+    if (rule === 'non-archive') return activeLabel === 'archive' // hide from non-archive views
+    if (rule === 'archive') return activeLabel !== 'archive' && activeLabel !== 'starred' // hide from archive/starred
+    return true
+  })
 }
 
 function buildParams(

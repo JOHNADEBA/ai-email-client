@@ -125,6 +125,29 @@ export class GmailAdapter implements EmailAdapter {
     }
   }
 
+  // Lightweight parse — headers + labels only, no body (used for thread list)
+  private parseMessageMeta(msg: Record<string, unknown>): Email {
+    const payload = msg.payload as Record<string, unknown>
+    const headers = (payload?.headers as Array<{ name: string; value: string }>) ?? []
+    const toRaw = getHeader(headers, 'To')
+    return {
+      id: msg.id as string,
+      accountId: this.accountId,
+      threadId: msg.threadId as string,
+      subject: getHeader(headers, 'Subject'),
+      from: parseAddress(getHeader(headers, 'From')),
+      to: toRaw ? toRaw.split(',').map(parseAddress) : [],
+      date: (() => { try { return new Date(getHeader(headers, 'Date')).toISOString() } catch { return new Date().toISOString() } })(),
+      snippet: (msg.snippet as string) ?? '',
+      body: '',
+      isRead: !((msg.labelIds as string[]) ?? []).includes('UNREAD'),
+      isStarred: ((msg.labelIds as string[]) ?? []).includes('STARRED'),
+      isArchived: !((msg.labelIds as string[]) ?? []).includes('INBOX'),
+      labels: ((msg.labelIds as string[]) ?? []).map((l: string) => l.toLowerCase()),
+      attachments: [],
+    }
+  }
+
   async listThreads(params: { maxResults?: number; pageToken?: string; query?: SearchQuery }) {
     try {
       const q = this.buildQuery(params.query)
@@ -136,12 +159,39 @@ export class GmailAdapter implements EmailAdapter {
       const data = await gmailFetch(`/users/me/threads?${qs}`, this.accessToken)
       const threadIds: string[] = (data.threads ?? []).map((t: { id: string }) => t.id)
 
-      const threads = await Promise.all(
-        threadIds.map(id => this.getThread(id).then(r => r.ok ? r.value : null))
+      // Use metadata format — headers+labels only, no body. 5-10x faster than format=full.
+      const metaHeaders = 'metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date'
+      const rawThreads = await Promise.all(
+        threadIds.map(id =>
+          gmailFetch(`/users/me/threads/${id}?format=metadata&${metaHeaders}`, this.accessToken).catch(() => null)
+        )
       )
 
+      const threads: EmailThread[] = rawThreads
+        .filter((d): d is Record<string, unknown> => d !== null)
+        .map(d => {
+          const msgs = ((d.messages ?? []) as Array<Record<string, unknown>>).map(m => this.parseMessageMeta(m))
+          const last = msgs[msgs.length - 1]
+          const allLabelIds = (d.messages as Array<Record<string, unknown>> ?? []).flatMap(m => (m.labelIds as string[]) ?? [])
+          return {
+            id: d.id as string,
+            accountId: this.accountId,
+            subject: last?.subject ?? '',
+            participants: [...new Map(msgs.flatMap(m => [m.from, ...m.to]).map(a => [a.email, a])).values()],
+            lastDate: last?.date ?? new Date().toISOString(),
+            snippet: last?.snippet || (d.snippet as string) ?? '',
+            isRead: msgs.every(m => m.isRead),
+            isStarred: msgs.some(m => m.isStarred),
+            isArchived: msgs.every(m => m.isArchived),
+            labels: [...new Set(msgs.flatMap(m => m.labels))],
+            messageCount: msgs.length,
+            messages: msgs,
+            aiCategory: this.gmailCategoryToAiCategory(allLabelIds),
+          }
+        })
+
       return ok({
-        threads: threads.filter((t): t is EmailThread => t !== null),
+        threads,
         nextPageToken: data.nextPageToken,
       })
     } catch (e) {
