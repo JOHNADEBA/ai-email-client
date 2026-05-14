@@ -43,6 +43,59 @@ export class GmailAdapter implements EmailAdapter {
     this.accessToken = accessToken
   }
 
+  private extractBody(payload: Record<string, unknown>): { text: string; html: string } {
+    let text = ''
+    let html = ''
+
+    const decode = (data: string) => Buffer.from(data, 'base64').toString('utf-8')
+
+    const walk = (part: Record<string, unknown>) => {
+      const mime = part.mimeType as string ?? ''
+      const bodyData = (part.body as Record<string, string>)?.data ?? ''
+
+      if (mime === 'text/plain' && bodyData && !text) {
+        text = decode(bodyData)
+      } else if (mime === 'text/html' && bodyData && !html) {
+        html = decode(bodyData)
+      } else if (mime.startsWith('multipart/')) {
+        for (const sub of (part.parts as Array<Record<string, unknown>>) ?? []) {
+          walk(sub)
+        }
+      }
+    }
+
+    walk(payload)
+    return { text, html }
+  }
+
+  private htmlToText(html: string): string {
+    return html
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/p>/gi, '\n\n')
+      .replace(/<\/div>/gi, '\n')
+      .replace(/<\/li>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+  }
+
+  private gmailCategoryToAiCategory(labelIds: string[]): import('@/types/email').AiCategory | undefined {
+    if (labelIds.includes('CATEGORY_PROMOTIONS')) return 'newsletter'
+    if (labelIds.includes('CATEGORY_SOCIAL')) return 'social'
+    if (labelIds.includes('CATEGORY_UPDATES')) return 'work'
+    if (labelIds.includes('CATEGORY_FORUMS')) return 'newsletter'
+    if (labelIds.includes('IMPORTANT')) return 'action_required'
+    return undefined
+  }
+
   private parseMessage(msg: Record<string, unknown>): Email {
     const payload = msg.payload as Record<string, unknown>
     const headers = (payload?.headers as Array<{ name: string; value: string }>) ?? []
@@ -51,18 +104,8 @@ export class GmailAdapter implements EmailAdapter {
     const toRaw = getHeader(headers, 'To')
     const date = getHeader(headers, 'Date')
 
-    let body = ''
-    const parts = (payload?.parts as Array<Record<string, unknown>>) ?? []
-    for (const part of parts) {
-      if (part.mimeType === 'text/plain') {
-        const data = (part.body as Record<string, string>)?.data ?? ''
-        body = Buffer.from(data, 'base64').toString('utf-8')
-      }
-    }
-    if (!body && payload?.body) {
-      const data = (payload.body as Record<string, string>)?.data ?? ''
-      body = Buffer.from(data, 'base64').toString('utf-8')
-    }
+    const { text, html } = this.extractBody(payload)
+    const body = text || (html ? this.htmlToText(html) : '')
 
     return {
       id: msg.id as string,
@@ -109,8 +152,10 @@ export class GmailAdapter implements EmailAdapter {
   async getThread(threadId: string) {
     try {
       const data = await gmailFetch(`/users/me/threads/${threadId}?format=full`, this.accessToken)
-      const messages: Email[] = (data.messages ?? []).map((m: Record<string, unknown>) => this.parseMessage(m))
+      const rawMessages = (data.messages ?? []) as Array<Record<string, unknown>>
+      const messages: Email[] = rawMessages.map(m => this.parseMessage(m))
       const last = messages[messages.length - 1]
+      const allLabelIds = rawMessages.flatMap(m => (m.labelIds as string[]) ?? [])
 
       const thread: EmailThread = {
         id: threadId,
@@ -125,6 +170,7 @@ export class GmailAdapter implements EmailAdapter {
         labels: [...new Set(messages.flatMap(m => m.labels))],
         messageCount: messages.length,
         messages,
+        aiCategory: this.gmailCategoryToAiCategory(allLabelIds),
       }
 
       return ok(thread)

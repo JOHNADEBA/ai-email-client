@@ -55,7 +55,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
 
   setAccounts: (accounts) => set({ accounts, activeAccountId: accounts.length > 1 ? null : (accounts[0]?.id ?? null) }),
   setIsDemo: (isDemo) => set({ isDemo }),
-  setActiveAccount: (id) => set({ activeAccountId: id, selectedThreadId: null, threads: [] }),
+  setActiveAccount: (id) => set({ activeAccountId: id, activeLabel: null, selectedThreadId: null, threads: [] }),
   setThreads: (threads) => set({ threads }),
   updateThread: (thread) => set(s => ({
     threads: s.threads.map(t => t.id === thread.id ? thread : t),

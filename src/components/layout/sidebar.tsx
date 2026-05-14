@@ -172,11 +172,11 @@ export function Sidebar() {
               key={label}
               label={label}
               icon={Icon}
-              active={id === null ? activeAccountId === null : activeLabel === id}
+              active={id === null ? (activeAccountId === null && !activeLabel) : activeLabel === id}
               badge={id === 'inbox' || id === null ? unreadCount : 0}
               onClick={() => {
                 if (id === null) {
-                  setActiveAccount(null)
+                  setActiveAccount(null) // also resets activeLabel via store
                 } else {
                   setActiveLabel(id)
                 }

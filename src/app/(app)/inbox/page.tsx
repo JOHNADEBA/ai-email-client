@@ -86,6 +86,25 @@ export default function InboxPage() {
 
   useEffect(() => { loadThreads() }, [loadThreads, refreshKey])
 
+  // Auto-fetch summaries for the first 5 threads that don't have one yet
+  useEffect(() => {
+    if (threads.length === 0) return
+    const toSummarize = threads.filter(t => !t.aiSummary).slice(0, 5)
+    if (toSummarize.length === 0) return
+    toSummarize.forEach(thread => {
+      fetch('/api/ai/summarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ thread }),
+      })
+        .then(r => r.json())
+        .then((data: { summary?: string }) => {
+          if (data.summary) updateThread({ ...thread, aiSummary: data.summary })
+        })
+        .catch(() => {})
+    })
+  }, [threads, updateThread])
+
   async function handleSelectThread(thread: EmailThread) {
     setSelectedThread(thread.id)
     if (!thread.isRead) {
