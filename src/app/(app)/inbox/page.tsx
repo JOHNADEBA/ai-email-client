@@ -9,6 +9,10 @@ import { cn } from '@/lib/utils'
 import type { EmailThread } from '@/types/email'
 import { RefreshCw, SlidersHorizontal } from 'lucide-react'
 
+// Simple in-memory cache: cacheKey → { threads, timestamp }
+const threadCache = new Map<string, { threads: EmailThread[]; ts: number }>()
+const CACHE_TTL = 60_000 // 60 seconds
+
 export default function InboxPage() {
   const accounts = useEmailStore(s => s.accounts)
   const isDemo = useEmailStore(s => s.isDemo)
@@ -27,10 +31,8 @@ export default function InboxPage() {
   const removeThread = useEmailStore(s => s.removeThread)
   const openCompose = useEmailStore(s => s.openCompose)
   const closeCompose = useEmailStore(s => s.closeCompose)
-
   const searchQuery = useEmailStore(s => s.searchQuery)
 
-  // In unified mode activeAccountId is null — fall back to first account for compose
   const account = accounts.find(a => a.id === activeAccountId) ?? accounts[0]
   const selectedThread = threads.find(t => t.id === selectedThreadId) ?? null
   const replyThread = composeReplyTo ? threads.find(t => t.id === composeReplyTo) : undefined
@@ -40,8 +42,9 @@ export default function InboxPage() {
   const [refreshKey, setRefreshKey] = useState(0)
   const [loadError, setLoadError] = useState<string | null>(null)
   const prevSearchRef = useRef(searchQuery)
+  // Tracks thread IDs already queued for summarization — prevents the infinite loop
+  const summarizedRef = useRef(new Set<string>())
 
-  // When search is cleared, reload the inbox
   useEffect(() => {
     if (prevSearchRef.current !== '' && searchQuery === '') {
       setRefreshKey(k => k + 1)
@@ -49,14 +52,24 @@ export default function InboxPage() {
     prevSearchRef.current = searchQuery
   }, [searchQuery])
 
-  // Unified mode: activeAccountId === null means show all accounts
   const isUnified = activeAccountId === null || activeAccountId === 'all'
 
-  const loadThreads = useCallback(async () => {
+  const cacheKey = `${activeAccountId ?? 'all'}::${activeLabel ?? 'inbox'}`
+
+  const loadThreads = useCallback(async (forceRefresh = false) => {
+    // Serve from cache if fresh
+    if (!forceRefresh) {
+      const cached = threadCache.get(cacheKey)
+      if (cached && Date.now() - cached.ts < CACHE_TTL) {
+        setThreads(cached.threads)
+        return
+      }
+    }
+
     setLoading(true)
     setLoadError(null)
     try {
-      const params = new URLSearchParams({ maxResults: '30' })
+      const params = new URLSearchParams({ maxResults: '50' })
 
       if (isUnified) {
         params.set('unified', 'true')
@@ -76,22 +89,30 @@ export default function InboxPage() {
         setThreads([])
         return
       }
-      setThreads(data.threads ?? [])
+      const fresh = data.threads ?? []
+      threadCache.set(cacheKey, { threads: fresh, ts: Date.now() })
+      setThreads(fresh)
     } catch (e) {
       setLoadError(String(e))
     } finally {
       setLoading(false)
     }
-  }, [activeAccountId, activeLabel, isUnified, setLoading, setThreads])
+  }, [activeAccountId, activeLabel, isUnified, cacheKey, setLoading, setThreads])
 
-  useEffect(() => { loadThreads() }, [loadThreads, refreshKey])
+  // On tab/account change: load (cache-first). On manual refresh: force-reload.
+  useEffect(() => {
+    summarizedRef.current.clear()
+    loadThreads(refreshKey > 0)
+  }, [loadThreads, refreshKey])
 
-  // Auto-fetch summaries for the first 5 threads that don't have one yet
+  // Auto-summarize first 5 threads — guarded by ref to avoid re-firing on every updateThread
   useEffect(() => {
     if (threads.length === 0) return
-    const toSummarize = threads.filter(t => !t.aiSummary).slice(0, 5)
+    const toSummarize = threads.filter(t => !t.aiSummary && !summarizedRef.current.has(t.id)).slice(0, 5)
     if (toSummarize.length === 0) return
+
     toSummarize.forEach(thread => {
+      summarizedRef.current.add(thread.id) // mark before fetch — prevents re-queueing
       fetch('/api/ai/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -99,54 +120,81 @@ export default function InboxPage() {
       })
         .then(r => r.json())
         .then((data: { summary?: string }) => {
-          if (data.summary) updateThread({ ...thread, aiSummary: data.summary })
+          if (data.summary) {
+            updateThread({ ...thread, aiSummary: data.summary })
+            // Update cache too so summary survives tab switch
+            const cached = threadCache.get(cacheKey)
+            if (cached) {
+              cached.threads = cached.threads.map(t =>
+                t.id === thread.id ? { ...t, aiSummary: data.summary } : t
+              )
+            }
+          }
         })
-        .catch(() => {})
+        .catch(() => { summarizedRef.current.delete(thread.id) })
     })
-  }, [threads, updateThread])
+  // Only re-run when the set of thread IDs changes, not on every updateThread call
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threads.map(t => t.id).join(',')])
 
-  async function handleSelectThread(thread: EmailThread) {
+  function handleSelectThread(thread: EmailThread) {
     setSelectedThread(thread.id)
     if (!thread.isRead) {
-      await fetch(`/api/emails/${thread.id}`, {
+      // Optimistic — mark read immediately, fire API in background
+      updateThread({ ...thread, isRead: true })
+      fetch(`/api/emails/${thread.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'markRead', accountId: thread.accountId, value: true }),
-      })
-      updateThread({ ...thread, isRead: true })
+      }).catch(() => {})
     }
   }
 
-  async function handleArchive() {
+  function handleArchive() {
     if (!selectedThread) return
-    await fetch(`/api/emails/${selectedThread.id}`, {
+    // Optimistic removal
+    removeThread(selectedThread.id)
+    fetch(`/api/emails/${selectedThread.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'archive', accountId: selectedThread.accountId }),
-    })
-    removeThread(selectedThread.id)
+    }).catch(() => {})
   }
 
-  async function handleDelete() {
+  function handleDelete() {
     if (!selectedThread) return
-    await fetch(`/api/emails/${selectedThread.id}`, {
+    removeThread(selectedThread.id)
+    fetch(`/api/emails/${selectedThread.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'delete', accountId: selectedThread.accountId }),
-    })
-    removeThread(selectedThread.id)
+    }).catch(() => {})
   }
 
-  async function handleStar(thread?: EmailThread) {
+  function handleStar(thread?: EmailThread) {
     const t = thread ?? selectedThread
     if (!t) return
     const starred = !t.isStarred
-    await fetch(`/api/emails/${t.id}`, {
+
+    // Optimistic: in starred view, unstarring removes the thread immediately
+    if (activeLabel === 'starred' && !starred) {
+      removeThread(t.id)
+    } else {
+      updateThread({ ...t, isStarred: starred })
+    }
+
+    fetch(`/api/emails/${t.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'star', accountId: t.accountId, value: starred }),
+    }).catch(() => {
+      // Revert on failure
+      if (activeLabel === 'starred' && !starred) {
+        updateThread({ ...t, isStarred: true })
+      } else {
+        updateThread({ ...t, isStarred: !starred })
+      }
     })
-    updateThread({ ...t, isStarred: starred })
   }
 
   const displayedThreads = sortByPriority
