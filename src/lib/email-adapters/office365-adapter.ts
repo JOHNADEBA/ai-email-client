@@ -78,14 +78,26 @@ export class Office365Adapter implements EmailAdapter {
   async listThreads(params: { maxResults?: number; pageToken?: string; query?: SearchQuery }) {
     try {
       const top = params.maxResults ?? 20
+      const q = params.query
+
+      const filters: string[] = []
+      if (q?.isStarred) filters.push("flag/flagStatus eq 'flagged'")
+      if (q?.isUnread) filters.push('isRead eq false')
+      if (q?.from) filters.push(`from/emailAddress/address eq '${q.from}'`)
+      if (q?.labels?.length) filters.push(`categories/any(c:c eq '${q.labels[0]}')`)
+
       const qs = new URLSearchParams({
         $top: String(top),
         $orderby: 'lastModifiedDateTime desc',
         $select: 'id,subject,from,toRecipients,receivedDateTime,bodyPreview,isRead,flag,categories,hasAttachments,conversationId',
       })
       if (params.pageToken) qs.set('$skip', params.pageToken)
+      if (filters.length) qs.set('$filter', filters.join(' and '))
+      if (q?.q) qs.set('$search', `"${q.q}"`)
 
-      const data = await graphFetch(`/me/mailFolders/inbox/messages?${qs}`, this.accessToken)
+      // Archived emails live in the archive folder; starred/normal come from inbox (or allMessages for flagged)
+      const folder = q?.isArchived ? 'archive' : q?.isStarred ? 'allMessages' : 'inbox'
+      const data = await graphFetch(`/me/mailFolders/${folder}/messages?${qs}`, this.accessToken)
       const messages: GraphMessage[] = data.value ?? []
 
       const byConversation = new Map<string, GraphMessage[]>()
