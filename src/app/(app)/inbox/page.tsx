@@ -129,14 +129,15 @@ export default function InboxPage() {
       if (cached && !t.aiSummary) updateThread({ ...t, aiSummary: cached })
     })
 
-    // Then fetch for threads that have no summary and haven't been requested yet
+    // Fetch summaries for all unsummarized threads, in batches of 10
     const toFetch = threads
       .filter(t => !t.aiSummary && !summaryCache.has(t.id) && !pendingSummaryIds.current.has(t.id))
-      .slice(0, 5)
 
-    toFetch.forEach(thread => {
+    if (toFetch.length === 0) return
+
+    const summarize = (thread: EmailThread) => {
       pendingSummaryIds.current.add(thread.id)
-      fetch('/api/ai/summarize', {
+      return fetch('/api/ai/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ thread }),
@@ -149,7 +150,14 @@ export default function InboxPage() {
           }
         })
         .catch(() => { pendingSummaryIds.current.delete(thread.id) })
-    })
+    }
+
+    // Fire in batches of 10 with 200ms stagger so we don't flood the server
+    const BATCH = 10
+    for (let i = 0; i < toFetch.length; i += BATCH) {
+      const batch = toFetch.slice(i, i + BATCH)
+      setTimeout(() => Promise.all(batch.map(summarize)), i * 20)
+    }
   // Only re-run when the set of thread IDs changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threads.map(t => t.id).join(',')])
