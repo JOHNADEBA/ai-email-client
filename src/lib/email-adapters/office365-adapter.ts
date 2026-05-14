@@ -88,7 +88,7 @@ export class Office365Adapter implements EmailAdapter {
 
       const qs = new URLSearchParams({
         $top: String(top),
-        $select: 'id,subject,from,toRecipients,receivedDateTime,bodyPreview,isRead,flag,categories,hasAttachments,conversationId',
+        $select: 'id,subject,from,toRecipients,ccRecipients,receivedDateTime,bodyPreview,body,isRead,flag,categories,hasAttachments,conversationId',
       })
       if (params.pageToken) qs.set('$skip', params.pageToken)
       if (filters.length) qs.set('$filter', filters.join(' and '))
