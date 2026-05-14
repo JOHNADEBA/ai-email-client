@@ -89,7 +89,7 @@ export class Office365Adapter implements EmailAdapter {
 
       const qs = new URLSearchParams({
         $top: String(top),
-        $select: 'id,subject,from,toRecipients,ccRecipients,receivedDateTime,bodyPreview,body,isRead,flag,categories,hasAttachments,conversationId',
+        $select: 'id,subject,from,toRecipients,ccRecipients,receivedDateTime,bodyPreview,isRead,flag,categories,hasAttachments,conversationId',
       })
       if (params.pageToken) qs.set('$skip', params.pageToken)
       if (filters.length) qs.set('$filter', filters.join(' and '))
@@ -141,17 +141,23 @@ export class Office365Adapter implements EmailAdapter {
 
   async getThread(threadId: string) {
     try {
-      // $orderby conflicts with $filter on /me/messages — sort client-side instead
-      const data = await graphFetch(
-        `/me/messages?$filter=conversationId eq '${threadId}'&$top=50`,
+      // Step 1: get message IDs for this conversation (list op — body is truncated here)
+      const listData = await graphFetch(
+        `/me/messages?$filter=conversationId eq '${threadId}'&$top=50&$select=id,receivedDateTime`,
         this.accessToken
       )
-      const messages: GraphMessage[] = (data.value ?? []).sort(
-        (a: GraphMessage, b: GraphMessage) => new Date(a.receivedDateTime).getTime() - new Date(b.receivedDateTime).getTime()
-      )
-      if (!messages.length) return err('NOT_FOUND', `Thread ${threadId} not found`)
+      const items: Array<{ id: string; receivedDateTime: string }> = listData.value ?? []
+      if (!items.length) return err('NOT_FOUND', `Thread ${threadId} not found`)
 
-      const mapped = messages.map(m => mapMessage(m, this.accountId))
+      // Step 2: fetch each message individually — single-item GET always returns full HTML body
+      const fullMessages = await Promise.all(
+        items.map(m => graphFetch(`/me/messages/${m.id}`, this.accessToken))
+      )
+
+      const sorted = (fullMessages as GraphMessage[]).sort(
+        (a, b) => new Date(a.receivedDateTime).getTime() - new Date(b.receivedDateTime).getTime()
+      )
+      const mapped = sorted.map(m => mapMessage(m, this.accountId))
       const last = mapped[mapped.length - 1]
 
       return ok({
