@@ -17,8 +17,14 @@ export async function GET(request: NextRequest) {
   const isArchived = searchParams.get('archived') === 'true'
   const unified = searchParams.get('unified') === 'true'
 
-  // Unified inbox: fetch from all accounts and merge
+  // Unified inbox: fetch from all accounts and merge, with composite pagination token
   if (unified) {
+    // pageToken is a base64-encoded JSON map of { accountId: token }
+    let accountTokens: Record<string, string> = {}
+    if (pageToken) {
+      try { accountTokens = JSON.parse(Buffer.from(pageToken, 'base64').toString('utf-8')) } catch { /* ignore */ }
+    }
+
     const results = await Promise.all(
       session.accounts.map(async (account) => {
         try {
@@ -31,15 +37,31 @@ export async function GET(request: NextRequest) {
           if (isUnread) query.isUnread = true
           if (isStarred) query.isStarred = true
           if (isArchived) query.isArchived = true
-          const result = await getAdapter(refreshed).listThreads({ maxResults, query })
-          return result.ok ? result.value.threads : []
-        } catch { return [] }
+          const result = await getAdapter(refreshed).listThreads({
+            maxResults,
+            pageToken: accountTokens[account.id],
+            query,
+          })
+          return result.ok
+            ? { threads: result.value.threads, nextPageToken: result.value.nextPageToken, accountId: account.id }
+            : { threads: [], nextPageToken: undefined, accountId: account.id }
+        } catch { return { threads: [], nextPageToken: undefined, accountId: '' } }
       })
     )
-    const merged = results.flat().sort(
-      (a, b) => new Date(b.lastDate).getTime() - new Date(a.lastDate).getTime()
-    ).slice(0, maxResults)
-    return NextResponse.json({ threads: merged })
+
+    const merged = results
+      .flatMap(r => r.threads)
+      .sort((a, b) => new Date(b.lastDate).getTime() - new Date(a.lastDate).getTime())
+      .slice(0, maxResults)
+
+    // Build composite next token — only include accounts that have more pages
+    const nextTokenMap: Record<string, string> = {}
+    results.forEach(r => { if (r.nextPageToken && r.accountId) nextTokenMap[r.accountId] = r.nextPageToken })
+    const nextPageToken = Object.keys(nextTokenMap).length > 0
+      ? Buffer.from(JSON.stringify(nextTokenMap)).toString('base64')
+      : undefined
+
+    return NextResponse.json({ threads: merged, nextPageToken })
   }
 
   const account = session.accounts.find(a => a.id === accountId)
