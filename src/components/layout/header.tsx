@@ -1,43 +1,68 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useEmailStore } from '@/store/email-store'
 import { Search, Menu, X, Bell } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { EmailThread } from '@/types/email'
 
+// Session-level search cache — avoids re-fetching the same query
+const searchCache = new Map<string, EmailThread[]>()
+
 export function Header() {
   const toggleSidebar = useEmailStore(s => s.toggleSidebar)
-  const searchQuery = useEmailStore(s => s.searchQuery)
   const setSearchQuery = useEmailStore(s => s.setSearchQuery)
   const setSearching = useEmailStore(s => s.setSearching)
   const setThreads = useEmailStore(s => s.setThreads)
 
-  const [inputValue, setInputValue] = useState(searchQuery)
+  const [inputValue, setInputValue] = useState('')
   const [focused, setFocused] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>(null)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const latestQuery = useRef('')
 
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    if (!inputValue.trim()) {
+  const runSearch = useCallback(async (q: string) => {
+    if (!q.trim()) {
       setSearchQuery('')
       return
     }
-    debounceRef.current = setTimeout(async () => {
-      setSearchQuery(inputValue)
-      setSearching(true)
-      try {
-        const res = await fetch(`/api/emails/search?q=${encodeURIComponent(inputValue)}`)
-        const data = await res.json() as { threads: EmailThread[] }
-        setThreads(data.threads)
-      } finally {
-        setSearching(false)
-      }
-    }, 400)
 
+    setSearchQuery(q)
+
+    // Serve from cache instantly
+    const cached = searchCache.get(q)
+    if (cached) {
+      setThreads(cached)
+      return
+    }
+
+    setSearching(true)
+    try {
+      const res = await fetch(`/api/emails/search?q=${encodeURIComponent(q)}`)
+      const data = await res.json() as { threads: EmailThread[] }
+      // Only apply if this is still the latest query (avoid race conditions)
+      if (latestQuery.current === q) {
+        searchCache.set(q, data.threads)
+        setThreads(data.threads)
+      }
+    } catch { /* silent */ } finally {
+      if (latestQuery.current === q) setSearching(false)
+    }
+  }, [setSearchQuery, setSearching, setThreads])
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+
+    if (!inputValue.trim()) {
+      latestQuery.current = ''
+      setSearchQuery('')
+      return
+    }
+
+    latestQuery.current = inputValue
+    debounceRef.current = setTimeout(() => runSearch(inputValue), 500)
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
-  }, [inputValue, setSearchQuery, setSearching, setThreads])
+  }, [inputValue, runSearch, setSearchQuery])
 
   function clear() {
     setInputValue('')
@@ -62,7 +87,7 @@ export function Header() {
         <Search className={cn('w-4 h-4 flex-shrink-0', focused ? 'text-blue-500' : 'text-gray-400')} />
         <input
           ref={searchRef}
-          type="search"
+          type="text"
           placeholder="Search emails, people, or keywords…"
           className="flex-1 bg-transparent text-sm text-gray-800 outline-none placeholder:text-gray-400"
           value={inputValue}
