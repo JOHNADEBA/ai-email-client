@@ -8,12 +8,13 @@ const client = new Anthropic({
 const MODEL = 'claude-sonnet-4-6'
 
 function threadContext(thread: EmailThread): string {
-  return thread.messages.map(m => `
-From: ${m.from.name ?? m.from.email} <${m.from.email}>
+  return thread.messages.map(m => {
+    const content = m.body || (m.bodyHtml ? m.bodyHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '') || thread.snippet || ''
+    return `From: ${m.from.name ?? m.from.email} <${m.from.email}>
 Date: ${new Date(m.date).toLocaleString()}
 ---
-${m.body.slice(0, 1500)}
-`).join('\n\n===\n\n')
+${content.slice(0, 1500)}`
+  }).join('\n\n===\n\n')
 }
 
 export async function summarizeThread(thread: EmailThread): Promise<string> {

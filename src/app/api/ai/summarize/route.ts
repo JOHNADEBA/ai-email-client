@@ -5,7 +5,7 @@ import type { EmailThread } from '@/types/email'
 
 function basicSummary(thread: EmailThread): string {
   const latest = thread.messages[thread.messages.length - 1]
-  const raw = latest?.body ?? thread.snippet ?? ''
+  const raw = latest?.body || latest?.bodyHtml || thread.snippet || ''
 
   // Strip HTML tags and collapse whitespace
   const text = raw
