@@ -233,13 +233,36 @@ export class GmailAdapter implements EmailAdapter {
   async sendEmail(data: ComposeData) {
     try {
       const to = data.to.map(a => a.name ? `"${a.name}" <${a.email}>` : a.email).join(', ')
-      const raw = [
-        `To: ${to}`,
-        `Subject: ${data.subject}`,
-        'Content-Type: text/plain; charset=utf-8',
-        '',
-        data.body,
-      ].join('\r\n')
+      let raw: string
+      if (data.bodyHtml) {
+        const boundary = `boundary_${Date.now()}`
+        raw = [
+          `To: ${to}`,
+          `Subject: ${data.subject}`,
+          'MIME-Version: 1.0',
+          `Content-Type: multipart/alternative; boundary="${boundary}"`,
+          '',
+          `--${boundary}`,
+          'Content-Type: text/plain; charset=utf-8',
+          '',
+          data.body,
+          '',
+          `--${boundary}`,
+          'Content-Type: text/html; charset=utf-8',
+          '',
+          data.bodyHtml,
+          '',
+          `--${boundary}--`,
+        ].join('\r\n')
+      } else {
+        raw = [
+          `To: ${to}`,
+          `Subject: ${data.subject}`,
+          'Content-Type: text/plain; charset=utf-8',
+          '',
+          data.body,
+        ].join('\r\n')
+      }
 
       const encoded = Buffer.from(raw).toString('base64url')
       const res = await gmailFetch('/users/me/messages/send', this.accessToken, {

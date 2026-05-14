@@ -10,6 +10,12 @@ function err(code: EmailError['code'], message: string): Result<never, EmailErro
   return { ok: false, error: { code, message } }
 }
 
+function decodeQuotedPrintable(str: string): string {
+  return str
+    .replace(/=\r?\n/g, '')
+    .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+}
+
 function parseAddress(raw: string): EmailAddress {
   const m = raw.match(/^"?([^"<]*)"?\s*<?([^>]*)>?$/)
   if (m) return { name: m[1].trim() || undefined, email: m[2].trim() || raw }
@@ -65,7 +71,11 @@ export class ImapAdapter implements EmailAdapter {
     const envelope = msg.envelope as Record<string, unknown> ?? {}
     const flags = (msg.flags as Set<string>) ?? new Set()
     const bodyParts = msg.bodyParts as Map<string, Buffer> | undefined
-    const bodyText = bodyParts?.get('1')?.toString('utf-8') ?? bodyParts?.get('text')?.toString('utf-8') ?? ''
+    const getRaw = (key: string) => bodyParts?.get(key)?.toString('latin1') ?? ''
+    const candidates = ['1', '2', '1.1', '1.2'].map(k => decodeQuotedPrintable(getRaw(k)))
+    const htmlPart = candidates.find(p => /<html|<div|<table|<!DOCTYPE/i.test(p)) ?? ''
+    const textPart = candidates.find(p => p.length > 0 && !/<html|<div|<table|<!DOCTYPE/i.test(p)) ?? ''
+    const bodyText = textPart || (htmlPart ? htmlPart.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '')
 
     const from = envelope.from as Array<{ name?: string; address?: string }> ?? []
     const to = envelope.to as Array<{ name?: string; address?: string }> ?? []
@@ -87,6 +97,7 @@ export class ImapAdapter implements EmailAdapter {
       date: envelope.date ? new Date(envelope.date as string).toISOString() : new Date().toISOString(),
       snippet: bodyText.slice(0, 200).replace(/\s+/g, ' '),
       body: bodyText,
+      bodyHtml: htmlPart || undefined,
       isRead: !flags.has('\\Seen') === false || flags.has('\\Seen'),
       isStarred: flags.has('\\Flagged'),
       isArchived: false,
@@ -109,7 +120,7 @@ export class ImapAdapter implements EmailAdapter {
         for await (const msg of client.fetch(recentUids.join(','), {
           envelope: true,
           flags: true,
-          bodyParts: ['1', 'text'],
+          bodyParts: ['1', '2', '1.1', '1.2'],
           uid: true,
         }, { uid: true })) {
           messages.push(this.parseImapMessage(msg as unknown as Record<string, unknown>, msg.uid))
@@ -153,7 +164,7 @@ export class ImapAdapter implements EmailAdapter {
         for await (const msg of client.fetch(uids.join(','), {
           envelope: true,
           flags: true,
-          bodyParts: ['1', 'text'],
+          bodyParts: ['1', '2', '1.1', '1.2'],
           uid: true,
         }, { uid: true })) {
           messages.push(this.parseImapMessage(msg as unknown as Record<string, unknown>, msg.uid))
@@ -200,6 +211,7 @@ export class ImapAdapter implements EmailAdapter {
         cc: data.cc?.map(a => a.email).join(', '),
         subject: data.subject,
         text: data.body,
+        ...(data.bodyHtml ? { html: data.bodyHtml } : {}),
       })
       return ok({ id: info.messageId })
     } catch (e) {
@@ -301,7 +313,7 @@ export class ImapAdapter implements EmailAdapter {
           for await (const msg of client.fetch(uids.slice(-50).join(','), {
             envelope: true,
             flags: true,
-            bodyParts: ['1', 'text'],
+            bodyParts: ['1', '2', '1.1', '1.2'],
             uid: true,
           }, { uid: true })) {
             messages.push(this.parseImapMessage(msg as unknown as Record<string, unknown>, msg.uid))

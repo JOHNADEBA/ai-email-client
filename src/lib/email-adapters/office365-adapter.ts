@@ -173,7 +173,7 @@ export class Office365Adapter implements EmailAdapter {
     try {
       const message = {
         subject: data.subject,
-        body: { contentType: 'text', content: data.body },
+        body: { contentType: data.bodyHtml ? 'html' : 'text', content: data.bodyHtml ?? data.body },
         toRecipients: data.to.map(a => ({ emailAddress: { name: a.name ?? '', address: a.email } })),
       }
       const res = await graphFetch('/me/sendMail', this.accessToken, {

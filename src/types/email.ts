@@ -96,6 +96,7 @@ export interface ComposeData {
   bcc?: EmailAddress[]
   subject: string
   body: string
+  bodyHtml?: string
   replyToId?: string
   forwardFromId?: string
   accountId: string

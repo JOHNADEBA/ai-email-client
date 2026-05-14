@@ -15,19 +15,28 @@ interface ComposeProps {
   onSent: () => void
 }
 
-function buildForwardBody(thread: EmailThread): string {
+function buildForwardBody(thread: EmailThread): { text: string; html: string | undefined } {
   const last = thread.messages[thread.messages.length - 1]
-  if (!last) return ''
-  return [
-    '',
+  if (!last) return { text: '', html: undefined }
+
+  const header = [
     '---------- Forwarded message ----------',
     `From: ${last.from.name ? `${last.from.name} <${last.from.email}>` : last.from.email}`,
     `Date: ${new Date(last.date).toLocaleString()}`,
     `Subject: ${last.subject}`,
     `To: ${last.to.map(a => a.name ? `${a.name} <${a.email}>` : a.email).join(', ')}`,
-    '',
-    last.body,
   ].join('\n')
+
+  const text = `\n${header}\n\n${last.body}`
+
+  const html = last.bodyHtml
+    ? `<br><div style="border-left:2px solid #ccc;padding-left:12px;margin-top:12px;color:#555">
+        <p style="font-size:12px;color:#888">${header.replace(/\n/g, '<br>')}</p>
+        ${last.bodyHtml}
+      </div>`
+    : undefined
+
+  return { text, html }
 }
 
 export function Compose({ account, allAccounts, replyTo, forwardFrom, onClose, onSent }: ComposeProps) {
@@ -43,7 +52,9 @@ export function Compose({ account, allAccounts, replyTo, forwardFrom, onClose, o
     if (forwardFrom) return `Fwd: ${forwardFrom.subject.replace(/^Fwd?:\s*/i, '')}`
     return ''
   })
-  const [body, setBody] = useState(() => forwardFrom ? buildForwardBody(forwardFrom) : '')
+  const forwardContent = forwardFrom ? buildForwardBody(forwardFrom) : null
+  const [body, setBody] = useState(() => forwardContent?.text ?? '')
+  const [forwardBodyHtml] = useState(() => forwardContent?.html)
   const [showCc, setShowCc] = useState(false)
   const [minimized, setMinimized] = useState(false)
   const [sending, setSending] = useState(false)
@@ -69,6 +80,7 @@ export function Compose({ account, allAccounts, replyTo, forwardFrom, onClose, o
           cc: cc ? cc.split(',').map(e => ({ email: e.trim() })) : [],
           subject,
           body,
+          ...(forwardBodyHtml ? { bodyHtml: `<p>${body.split('\n')[0] || ''}</p>${forwardBodyHtml}` } : {}),
           replyToId: replyTo?.id,
           forwardFromId: forwardFrom?.id,
         }),
