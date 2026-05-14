@@ -74,6 +74,7 @@ export async function GET(request: NextRequest) {
     response.cookies.delete('oauth_state')
     return response
   } catch (e) {
+    console.error('[microsoft/callback] error:', e)
     return NextResponse.redirect(`${process.env.NEXT_PUBLIC_APP_URL}/login?error=${encodeURIComponent(String(e))}`)
   }
 }
