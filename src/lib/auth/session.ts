@@ -66,10 +66,14 @@ export async function addAccountToSession(account: EmailAccount): Promise<void> 
     session.userId = `user-${Date.now()}`
     session.accounts = []
   }
+  // Strip accessToken and avatar before storing — keeps cookie small for multi-account.
+  // accessToken is refreshed on every API request using the stored refreshToken.
+  const { accessToken: _at, avatar: _av, ...compact } = account
+  const toStore = compact as EmailAccount
   const existing = session.accounts ?? []
-  const idx = existing.findIndex(a => a.id === account.id)
-  if (idx >= 0) existing[idx] = account
-  else existing.push(account)
+  const idx = existing.findIndex(a => a.id === toStore.id)
+  if (idx >= 0) existing[idx] = toStore
+  else existing.push(toStore)
   session.accounts = existing
   await session.save()
 }
@@ -77,7 +81,9 @@ export async function addAccountToSession(account: EmailAccount): Promise<void> 
 export async function updateAccountInSession(accountId: string, patch: Partial<EmailAccount>): Promise<void> {
   const cookieStore = await cookies()
   const session = await getIronSession<SessionData>(cookieStore, getSessionOptions())
-  session.accounts = (session.accounts ?? []).map(a => a.id === accountId ? { ...a, ...patch } : a)
+  // Never write accessToken back to cookie — keeps cookie small
+  const { accessToken: _at, avatar: _av, ...safePatch } = patch
+  session.accounts = (session.accounts ?? []).map(a => a.id === accountId ? { ...a, ...safePatch } : a)
   await session.save()
 }
 
