@@ -117,6 +117,7 @@ export class GmailAdapter implements EmailAdapter {
       date: new Date(date).toISOString(),
       snippet: (msg.snippet as string) ?? '',
       body,
+      bodyHtml: html || undefined,
       isRead: !((msg.labelIds as string[]) ?? []).includes('UNREAD'),
       isStarred: ((msg.labelIds as string[]) ?? []).includes('STARRED'),
       isArchived: !((msg.labelIds as string[]) ?? []).includes('INBOX'),

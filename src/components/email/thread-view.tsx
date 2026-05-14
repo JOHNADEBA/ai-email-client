@@ -244,9 +244,24 @@ export function ThreadView({ thread, onArchive, onDelete, onStar, onReply, onFor
                       <span className="block">Cc: {message.cc.map(a => a.name ?? a.email).join(', ')}</span>
                     ) : null}
                   </div>
-                  <div className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed break-words">
-                    {message.body}
-                  </div>
+                  {message.bodyHtml ? (
+                    <iframe
+                      srcDoc={message.bodyHtml}
+                      sandbox="allow-popups allow-popups-to-escape-sandbox"
+                      className="w-full border-0 min-h-[200px]"
+                      style={{ height: '600px' }}
+                      onLoad={e => {
+                        const iframe = e.currentTarget
+                        const body = iframe.contentDocument?.body
+                        if (body) iframe.style.height = `${body.scrollHeight + 32}px`
+                      }}
+                      title="Email content"
+                    />
+                  ) : (
+                    <div className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed break-words">
+                      {message.body}
+                    </div>
+                  )}
                   {message.attachments.length > 0 && (
                     <div className="mt-4 flex flex-wrap gap-2">
                       {message.attachments.map(att => (
