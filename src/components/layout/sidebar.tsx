@@ -4,7 +4,7 @@ import { cn, providerColor, providerIcon } from '@/lib/utils'
 import { useEmailStore } from '@/store/email-store'
 import { Button } from '@/components/ui/button'
 import {
-  Inbox, Star, Archive, Briefcase, User, Newspaper,
+  Star, Archive, Briefcase, User, Newspaper,
   Zap, DollarSign, MessageSquare, Edit, X, ChevronDown,
   Layers, Plus, LogOut, Trash2,
 } from 'lucide-react'
@@ -12,7 +12,6 @@ import { useState } from 'react'
 
 const SYSTEM_LABELS = [
   { id: null, label: 'All Inboxes', icon: Layers },
-  { id: 'inbox', label: 'Inbox', icon: Inbox },
   { id: 'starred', label: 'Starred', icon: Star },
   { id: 'archive', label: 'Archive', icon: Archive },
 ]
