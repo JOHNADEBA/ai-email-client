@@ -140,11 +140,14 @@ export class Office365Adapter implements EmailAdapter {
 
   async getThread(threadId: string) {
     try {
+      // $orderby conflicts with $filter on /me/messages — sort client-side instead
       const data = await graphFetch(
-        `/me/messages?$filter=conversationId eq '${threadId}'&$orderby=receivedDateTime asc&$top=50`,
+        `/me/messages?$filter=conversationId eq '${threadId}'&$top=50`,
         this.accessToken
       )
-      const messages: GraphMessage[] = data.value ?? []
+      const messages: GraphMessage[] = (data.value ?? []).sort(
+        (a: GraphMessage, b: GraphMessage) => new Date(a.receivedDateTime).getTime() - new Date(b.receivedDateTime).getTime()
+      )
       if (!messages.length) return err('NOT_FOUND', `Thread ${threadId} not found`)
 
       const mapped = messages.map(m => mapMessage(m, this.accountId))

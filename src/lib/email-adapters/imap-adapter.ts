@@ -84,7 +84,7 @@ export class ImapAdapter implements EmailAdapter {
       return { textPart, htmlPart }
     }
     const subtype = String(struct.subtype ?? '').toLowerCase()
-    const id = String(struct.part ?? '')
+    const id = String(struct.part ?? '') || '1'  // root single-part has no part ID; '1' is correct
     const encoding = String(struct.encoding ?? '').toLowerCase()
     if (type === 'text' && subtype === 'plain') return { textPart: { id, encoding } }
     if (type === 'text' && subtype === 'html') return { htmlPart: { id, encoding } }
