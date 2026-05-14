@@ -16,6 +16,52 @@ function decodeQuotedPrintable(str: string): string {
     .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
 }
 
+function decodeTransferEncoding(body: string, encoding: string): string {
+  const enc = encoding.toLowerCase().trim()
+  if (enc === 'base64') {
+    try { return Buffer.from(body.replace(/\s/g, ''), 'base64').toString('utf-8') } catch { return body }
+  }
+  if (enc === 'quoted-printable') return decodeQuotedPrintable(body)
+  return body
+}
+
+function parseMimePart(raw: string): { text: string; html: string } {
+  const sepIdx = raw.search(/\r?\n\r?\n/)
+  if (sepIdx === -1) return { text: raw.trim(), html: '' }
+
+  const headers = raw.slice(0, sepIdx)
+  const body = raw.slice(sepIdx + raw.slice(sepIdx).match(/^\r?\n\r?\n/)![0].length)
+
+  const getHeader = (name: string) => {
+    const m = headers.match(new RegExp(`^${name}:[ \\t]*([^\\r\\n]+(?:\\r?\\n[ \\t][^\\r\\n]+)*)`, 'im'))
+    return m ? m[1].replace(/\r?\n[ \t]/g, ' ').trim() : ''
+  }
+
+  const contentType = getHeader('Content-Type') || 'text/plain'
+  const encoding = getHeader('Content-Transfer-Encoding') || '7bit'
+  const mimeType = contentType.split(';')[0].trim().toLowerCase()
+
+  if (mimeType.startsWith('multipart/')) {
+    const bm = contentType.match(/boundary=(?:"([^"]+)"|([^\s;]+))/i)
+    if (!bm) return { text: '', html: '' }
+    const boundary = (bm[1] ?? bm[2]).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const parts = body.split(new RegExp(`--${boundary}(?:--)?\\s*(?:\\r?\\n|$)`))
+    let text = ''
+    let html = ''
+    for (const part of parts) {
+      if (!part.trim()) continue
+      const r = parseMimePart(part)
+      if (!text && r.text) text = r.text
+      if (!html && r.html) html = r.html
+    }
+    return { text, html }
+  }
+
+  const decoded = decodeTransferEncoding(body, encoding)
+  if (mimeType === 'text/html') return { text: '', html: decoded }
+  return { text: decoded, html: '' }
+}
+
 function parseAddress(raw: string): EmailAddress {
   const m = raw.match(/^"?([^"<]*)"?\s*<?([^>]*)>?$/)
   if (m) return { name: m[1].trim() || undefined, email: m[2].trim() || raw }
@@ -67,38 +113,6 @@ export class ImapAdapter implements EmailAdapter {
     this.config = config
   }
 
-  private findBodyParts(struct: Record<string, unknown>): {
-    textPart?: { id: string; encoding: string }
-    htmlPart?: { id: string; encoding: string }
-  } {
-    const type = String(struct.type ?? '').toLowerCase()
-    if (type === 'multipart') {
-      const children = (struct.childNodes as Record<string, unknown>[]) ?? []
-      let textPart: { id: string; encoding: string } | undefined
-      let htmlPart: { id: string; encoding: string } | undefined
-      for (const child of children) {
-        const found = this.findBodyParts(child as Record<string, unknown>)
-        if (!textPart && found.textPart) textPart = found.textPart
-        if (!htmlPart && found.htmlPart) htmlPart = found.htmlPart
-      }
-      return { textPart, htmlPart }
-    }
-    const subtype = String(struct.subtype ?? '').toLowerCase()
-    const id = String(struct.part ?? '') || '1'  // root single-part has no part ID; '1' is correct
-    const encoding = String(struct.encoding ?? '').toLowerCase()
-    if (type === 'text' && subtype === 'plain') return { textPart: { id, encoding } }
-    if (type === 'text' && subtype === 'html') return { htmlPart: { id, encoding } }
-    return {}
-  }
-
-  private decodeBody(raw: string, encoding: string): string {
-    if (encoding === 'base64') {
-      try { return Buffer.from(raw.replace(/\s/g, ''), 'base64').toString('utf-8') } catch { return raw }
-    }
-    if (encoding === 'quoted-printable') return decodeQuotedPrintable(raw)
-    return raw
-  }
-
   private buildEmail(
     uid: number,
     envelope: Record<string, unknown>,
@@ -135,59 +149,19 @@ export class ImapAdapter implements EmailAdapter {
 
   private async fetchMessages(client: ImapFlow, uidRange: string): Promise<Email[]> {
     if (!uidRange) return []
-
-    // Pass 1: envelope + flags + bodyStructure (no body content yet)
-    type MsgMeta = {
-      uid: number; envelope: Record<string, unknown>; flags: Set<string>
-      textPartId?: string; textEncoding?: string
-      htmlPartId?: string; htmlEncoding?: string
+    const results: Email[] = []
+    for await (const msg of client.fetch(uidRange, { envelope: true, flags: true, source: true, uid: true }, { uid: true })) {
+      const source = (msg.source as Buffer | undefined)?.toString('latin1') ?? ''
+      const { text, html } = source ? parseMimePart(source) : { text: '', html: '' }
+      results.push(this.buildEmail(
+        msg.uid,
+        msg.envelope as Record<string, unknown>,
+        msg.flags as Set<string>,
+        text,
+        html,
+      ))
     }
-    const metas: MsgMeta[] = []
-    for await (const msg of client.fetch(uidRange, { envelope: true, flags: true, bodyStructure: true, uid: true }, { uid: true })) {
-      const struct = msg.bodyStructure as Record<string, unknown> | undefined
-      const parts = struct ? this.findBodyParts(struct) : { textPart: { id: '1', encoding: '7bit' } }
-      metas.push({
-        uid: msg.uid,
-        envelope: msg.envelope as Record<string, unknown>,
-        flags: msg.flags as Set<string>,
-        textPartId: parts.textPart?.id,
-        textEncoding: parts.textPart?.encoding,
-        htmlPartId: parts.htmlPart?.id,
-        htmlEncoding: parts.htmlPart?.encoding,
-      })
-    }
-
-    if (!metas.length) return []
-
-    // Pass 2: group by required parts, batch-fetch body content per group
-    const partGroups = new Map<string, number[]>()
-    for (const m of metas) {
-      const key = [m.textPartId, m.htmlPartId].filter(Boolean).sort().join(',') || '1'
-      const arr = partGroups.get(key) ?? []
-      arr.push(m.uid)
-      partGroups.set(key, arr)
-    }
-
-    const bodyByUid = new Map<number, { text: string; html: string }>()
-    for (const [partsKey, groupUids] of partGroups) {
-      const parts = partsKey.split(',').filter(Boolean)
-      try {
-        for await (const msg of client.fetch(groupUids.join(','), { bodyParts: parts, uid: true }, { uid: true })) {
-          const bp = msg.bodyParts as Map<string, Buffer> | undefined
-          const meta = metas.find(m => m.uid === msg.uid)!
-          const getRaw = (id?: string) => id ? (bp?.get(id)?.toString('latin1') ?? '') : ''
-          bodyByUid.set(msg.uid, {
-            text: this.decodeBody(getRaw(meta.textPartId), meta.textEncoding ?? ''),
-            html: this.decodeBody(getRaw(meta.htmlPartId), meta.htmlEncoding ?? ''),
-          })
-        }
-      } catch { /* body unavailable for this group */ }
-    }
-
-    return metas.map(m => {
-      const body = bodyByUid.get(m.uid) ?? { text: '', html: '' }
-      return this.buildEmail(m.uid, m.envelope, m.flags, body.text, body.html)
-    })
+    return results
   }
 
   async listThreads(params: { maxResults?: number; pageToken?: string; query?: SearchQuery }) {
