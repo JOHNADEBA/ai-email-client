@@ -22,7 +22,7 @@ async function graphFetch(path: string, accessToken: string, options?: RequestIn
     const body = await res.text()
     throw new Error(`Graph API ${res.status}: ${body}`)
   }
-  if (res.status === 204) return {}
+  if (res.status === 204 || res.status === 202) return {}
   return res.json()
 }
 
