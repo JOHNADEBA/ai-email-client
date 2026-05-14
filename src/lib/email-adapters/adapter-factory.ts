@@ -6,7 +6,7 @@ import { Office365Adapter } from './office365-adapter'
 import { ImapAdapter } from './imap-adapter'
 
 export function getAdapter(account: EmailAccount): EmailAdapter {
-  if (account.provider === 'demo') {
+  if (account.provider === 'demo' || account.id.startsWith('demo-')) {
     return new DemoAdapter(account.id)
   }
 
