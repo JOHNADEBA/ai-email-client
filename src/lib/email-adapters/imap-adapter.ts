@@ -67,25 +67,52 @@ export class ImapAdapter implements EmailAdapter {
     this.config = config
   }
 
-  private parseImapMessage(msg: Record<string, unknown>, uid: number): Email {
-    const envelope = msg.envelope as Record<string, unknown> ?? {}
-    const flags = (msg.flags as Set<string>) ?? new Set()
-    const bodyParts = msg.bodyParts as Map<string, Buffer> | undefined
-    const getRaw = (key: string) => bodyParts?.get(key)?.toString('latin1') ?? ''
-    const candidates = ['1', '2', '1.1', '1.2'].map(k => decodeQuotedPrintable(getRaw(k)))
-    const htmlPart = candidates.find(p => /<html|<div|<table|<!DOCTYPE/i.test(p)) ?? ''
-    const textPart = candidates.find(p => p.length > 0 && !/<html|<div|<table|<!DOCTYPE/i.test(p)) ?? ''
-    const bodyText = textPart || (htmlPart ? htmlPart.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '')
+  private findBodyParts(struct: Record<string, unknown>): {
+    textPart?: { id: string; encoding: string }
+    htmlPart?: { id: string; encoding: string }
+  } {
+    const type = String(struct.type ?? '').toLowerCase()
+    if (type === 'multipart') {
+      const children = (struct.childNodes as Record<string, unknown>[]) ?? []
+      let textPart: { id: string; encoding: string } | undefined
+      let htmlPart: { id: string; encoding: string } | undefined
+      for (const child of children) {
+        const found = this.findBodyParts(child as Record<string, unknown>)
+        if (!textPart && found.textPart) textPart = found.textPart
+        if (!htmlPart && found.htmlPart) htmlPart = found.htmlPart
+      }
+      return { textPart, htmlPart }
+    }
+    const subtype = String(struct.subtype ?? '').toLowerCase()
+    const id = String(struct.part ?? '')
+    const encoding = String(struct.encoding ?? '').toLowerCase()
+    if (type === 'text' && subtype === 'plain') return { textPart: { id, encoding } }
+    if (type === 'text' && subtype === 'html') return { htmlPart: { id, encoding } }
+    return {}
+  }
 
-    const from = envelope.from as Array<{ name?: string; address?: string }> ?? []
-    const to = envelope.to as Array<{ name?: string; address?: string }> ?? []
-    const cc = envelope.cc as Array<{ name?: string; address?: string }> ?? []
+  private decodeBody(raw: string, encoding: string): string {
+    if (encoding === 'base64') {
+      try { return Buffer.from(raw.replace(/\s/g, ''), 'base64').toString('utf-8') } catch { return raw }
+    }
+    if (encoding === 'quoted-printable') return decodeQuotedPrintable(raw)
+    return raw
+  }
 
+  private buildEmail(
+    uid: number,
+    envelope: Record<string, unknown>,
+    flags: Set<string>,
+    text: string,
+    html: string,
+  ): Email {
+    const from = (envelope.from as Array<{ name?: string; address?: string }>) ?? []
+    const to = (envelope.to as Array<{ name?: string; address?: string }>) ?? []
+    const cc = (envelope.cc as Array<{ name?: string; address?: string }>) ?? []
     const mapAddr = (a: { name?: string; address?: string }): EmailAddress => ({
-      name: a.name || undefined,
-      email: a.address ?? '',
+      name: a.name || undefined, email: a.address ?? '',
     })
-
+    const bodyText = text || (html ? html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '')
     return {
       id: String(uid),
       accountId: this.accountId,
@@ -97,13 +124,70 @@ export class ImapAdapter implements EmailAdapter {
       date: envelope.date ? new Date(envelope.date as string).toISOString() : new Date().toISOString(),
       snippet: bodyText.slice(0, 200).replace(/\s+/g, ' '),
       body: bodyText,
-      bodyHtml: htmlPart || undefined,
-      isRead: !flags.has('\\Seen') === false || flags.has('\\Seen'),
+      bodyHtml: html || undefined,
+      isRead: flags.has('\\Seen'),
       isStarred: flags.has('\\Flagged'),
       isArchived: false,
       labels: [],
       attachments: [],
     }
+  }
+
+  private async fetchMessages(client: ImapFlow, uidRange: string): Promise<Email[]> {
+    if (!uidRange) return []
+
+    // Pass 1: envelope + flags + bodyStructure (no body content yet)
+    type MsgMeta = {
+      uid: number; envelope: Record<string, unknown>; flags: Set<string>
+      textPartId?: string; textEncoding?: string
+      htmlPartId?: string; htmlEncoding?: string
+    }
+    const metas: MsgMeta[] = []
+    for await (const msg of client.fetch(uidRange, { envelope: true, flags: true, bodyStructure: true, uid: true }, { uid: true })) {
+      const struct = msg.bodyStructure as Record<string, unknown> | undefined
+      const parts = struct ? this.findBodyParts(struct) : { textPart: { id: '1', encoding: '7bit' } }
+      metas.push({
+        uid: msg.uid,
+        envelope: msg.envelope as Record<string, unknown>,
+        flags: msg.flags as Set<string>,
+        textPartId: parts.textPart?.id,
+        textEncoding: parts.textPart?.encoding,
+        htmlPartId: parts.htmlPart?.id,
+        htmlEncoding: parts.htmlPart?.encoding,
+      })
+    }
+
+    if (!metas.length) return []
+
+    // Pass 2: group by required parts, batch-fetch body content per group
+    const partGroups = new Map<string, number[]>()
+    for (const m of metas) {
+      const key = [m.textPartId, m.htmlPartId].filter(Boolean).sort().join(',') || '1'
+      const arr = partGroups.get(key) ?? []
+      arr.push(m.uid)
+      partGroups.set(key, arr)
+    }
+
+    const bodyByUid = new Map<number, { text: string; html: string }>()
+    for (const [partsKey, groupUids] of partGroups) {
+      const parts = partsKey.split(',').filter(Boolean)
+      try {
+        for await (const msg of client.fetch(groupUids.join(','), { bodyParts: parts, uid: true }, { uid: true })) {
+          const bp = msg.bodyParts as Map<string, Buffer> | undefined
+          const meta = metas.find(m => m.uid === msg.uid)!
+          const getRaw = (id?: string) => id ? (bp?.get(id)?.toString('latin1') ?? '') : ''
+          bodyByUid.set(msg.uid, {
+            text: this.decodeBody(getRaw(meta.textPartId), meta.textEncoding ?? ''),
+            html: this.decodeBody(getRaw(meta.htmlPartId), meta.htmlEncoding ?? ''),
+          })
+        }
+      } catch { /* body unavailable for this group */ }
+    }
+
+    return metas.map(m => {
+      const body = bodyByUid.get(m.uid) ?? { text: '', html: '' }
+      return this.buildEmail(m.uid, m.envelope, m.flags, body.text, body.html)
+    })
   }
 
   async listThreads(params: { maxResults?: number; pageToken?: string; query?: SearchQuery }) {
@@ -116,15 +200,7 @@ export class ImapAdapter implements EmailAdapter {
         const uids: number[] = Array.isArray(rawUids) ? rawUids : []
         const recentUids = uids.slice(-max * 2).reverse()
 
-        const messages: Email[] = []
-        for await (const msg of client.fetch(recentUids.join(','), {
-          envelope: true,
-          flags: true,
-          bodyParts: ['1', '2', '1.1', '1.2'],
-          uid: true,
-        }, { uid: true })) {
-          messages.push(this.parseImapMessage(msg as unknown as Record<string, unknown>, msg.uid))
-        }
+        const messages = await this.fetchMessages(client, recentUids.join(','))
 
         // Group by subject for basic threading
         const bySubject = new Map<string, Email[]>()
@@ -160,15 +236,7 @@ export class ImapAdapter implements EmailAdapter {
         const rawUids = await client.search({ uid: threadId }, { uid: true })
         const uids: number[] = Array.isArray(rawUids) ? rawUids : []
         if (!uids.length) return null
-        const messages: Email[] = []
-        for await (const msg of client.fetch(uids.join(','), {
-          envelope: true,
-          flags: true,
-          bodyParts: ['1', '2', '1.1', '1.2'],
-          uid: true,
-        }, { uid: true })) {
-          messages.push(this.parseImapMessage(msg as unknown as Record<string, unknown>, msg.uid))
-        }
+        const messages = await this.fetchMessages(client, uids.join(','))
         return messages.length ? this.buildThread(messages) : null
       })
 
@@ -308,17 +376,7 @@ export class ImapAdapter implements EmailAdapter {
         const criteria = this.buildSearchCriteria(query)
         const rawSearch = await client.search(criteria, { uid: true })
         const uids: number[] = Array.isArray(rawSearch) ? rawSearch : []
-        const messages: Email[] = []
-        if (uids.length) {
-          for await (const msg of client.fetch(uids.slice(-50).join(','), {
-            envelope: true,
-            flags: true,
-            bodyParts: ['1', '2', '1.1', '1.2'],
-            uid: true,
-          }, { uid: true })) {
-            messages.push(this.parseImapMessage(msg as unknown as Record<string, unknown>, msg.uid))
-          }
-        }
+        const messages = uids.length ? await this.fetchMessages(client, uids.slice(-50).join(',')) : []
         const bySubject = new Map<string, Email[]>()
         for (const m of messages) {
           const key = m.subject.replace(/^(Re|Fwd?):\s*/i, '').trim().toLowerCase()
