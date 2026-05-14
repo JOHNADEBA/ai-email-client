@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import {
   Inbox, Star, Archive, Briefcase, User, Newspaper,
   Zap, DollarSign, MessageSquare, Edit, X, ChevronDown,
-  Layers, Plus, LogOut,
+  Layers, Plus, LogOut, Trash2,
 } from 'lucide-react'
 import { useState } from 'react'
 
@@ -39,6 +39,16 @@ export function Sidebar() {
 
   const unreadCount = threads.filter(t => !t.isRead && !t.isArchived).length
   const [showAccounts, setShowAccounts] = useState(true)
+
+  async function handleRemoveAccount(e: React.MouseEvent, accountId: string) {
+    e.stopPropagation()
+    await fetch('/api/auth/disconnect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountId }),
+    })
+    window.location.reload()
+  }
 
   async function handleLogout() {
     await fetch('/api/auth/logout', { method: 'POST' })
@@ -101,7 +111,7 @@ export function Sidebar() {
                 <button
                   key={account.id}
                   className={cn(
-                    'w-full flex items-center gap-2.5 px-2 py-2 rounded-lg text-sm transition-colors mt-0.5',
+                    'group w-full flex items-center gap-2.5 px-2 py-2 rounded-lg text-sm transition-colors mt-0.5',
                     activeAccountId === account.id ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-800'
                   )}
                   onClick={() => setActiveAccount(account.id)}
@@ -109,10 +119,17 @@ export function Sidebar() {
                   <div className={cn('w-5 h-5 rounded flex items-center justify-center text-white text-xs font-bold flex-shrink-0', providerColor(account.provider))}>
                     {providerIcon(account.provider)}
                   </div>
-                  <div className="text-left min-w-0">
+                  <div className="text-left min-w-0 flex-1">
                     <div className="truncate text-xs font-medium">{account.name}</div>
                     <div className="truncate text-xs text-gray-400">{account.email}</div>
                   </div>
+                  <button
+                    onClick={(e) => handleRemoveAccount(e, account.id)}
+                    className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-500/20 text-gray-500 hover:text-red-400 transition-all flex-shrink-0"
+                    title="Remove account"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
                 </button>
               ))}
               <a
