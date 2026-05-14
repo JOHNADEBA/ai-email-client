@@ -85,10 +85,13 @@ export function Compose({ account, allAccounts, replyTo, forwardFrom, onClose, o
           forwardFromId: forwardFrom?.id,
         }),
       })
-      if (!res.ok) throw new Error('Send failed')
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string }
+        throw new Error(data.error || 'Send failed')
+      }
       onSent()
-    } catch {
-      setError('Failed to send. Please try again.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to send. Please try again.')
     } finally {
       setSending(false)
     }
