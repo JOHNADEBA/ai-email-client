@@ -179,7 +179,7 @@ export class GmailAdapter implements EmailAdapter {
             subject: last?.subject ?? '',
             participants: [...new Map(msgs.flatMap(m => [m.from, ...m.to]).map(a => [a.email, a])).values()],
             lastDate: last?.date ?? new Date().toISOString(),
-            snippet: last?.snippet || (d.snippet as string) ?? '',
+            snippet: (last?.snippet || (d.snippet as string)) ?? '',
             isRead: msgs.every(m => m.isRead),
             isStarred: msgs.some(m => m.isStarred),
             isArchived: msgs.every(m => m.isArchived),
