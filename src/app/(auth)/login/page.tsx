@@ -1,13 +1,11 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useSearchParams } from 'next/navigation'
 import { Mail, Lock, Server, ChevronDown, ChevronUp, AlertCircle, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export default function LoginPage() {
   const isDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === 'true'
-  const searchParams = useSearchParams()
 
   const hasGoogle = true  // shown always; will show "not configured" if env missing
   const hasMicrosoft = true
@@ -20,7 +18,13 @@ export default function LoginPage() {
   const [imapSecure, setImapSecure] = useState(true)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(searchParams.get('error') ?? '')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const e = params.get('error')
+    if (e) setError(decodeURIComponent(e))
+  }, [])
 
   async function connectImap(e: React.FormEvent) {
     e.preventDefault()
@@ -69,7 +73,7 @@ export default function LoginPage() {
         {error && (
           <div className="flex items-start gap-2 p-3 mb-4 bg-red-50 rounded-lg text-red-700 text-xs">
             <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-            <span className="break-all">{decodeURIComponent(error)}</span>
+            <span className="break-all">{error}</span>
           </div>
         )}
 
