@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
   const account = session.accounts.find(a => a.id === thread.accountId)
 
   if (!process.env.ANTHROPIC_API_KEY) {
-    return NextResponse.json({ draft: 'AI reply drafts are not configured. To see this feature in action, try the Demo mode from the login page.' })
+    return NextResponse.json({ draft: 'Add an ANTHROPIC_API_KEY to unlock AI reply drafts, or try Demo mode to see it in action.' })
   }
 
   const draft = await generateReplyDraft(thread, account?.email ?? '')

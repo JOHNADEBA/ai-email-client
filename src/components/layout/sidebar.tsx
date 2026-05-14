@@ -59,12 +59,19 @@ export function Sidebar() {
 
   async function handleToggleDemo() {
     if (isDemo) {
+      // Switching to live — check if real accounts exist first
       await fetch('/api/auth/demo/exit', { method: 'POST' })
+      const res = await fetch('/api/accounts?real=1')
+      const data = await res.json() as { hasRealAccounts: boolean }
+      if (data.hasRealAccounts) {
+        window.location.reload()
+      } else {
+        window.location.href = '/login'
+      }
     } else {
-      await fetch('/api/auth/demo')
+      // Switching to demo
+      window.location.href = '/api/auth/demo'
     }
-    setIsDemo(!isDemo)
-    window.location.reload()
   }
 
   return (
@@ -144,13 +151,15 @@ export function Sidebar() {
                   </button>
                 </button>
               ))}
-              <a
-                href="/login"
-                className="w-full flex items-center gap-2.5 px-2 py-2 rounded-lg text-sm text-gray-400 hover:bg-gray-800 hover:text-gray-200 transition-colors mt-0.5"
-              >
-                <Plus className="w-4 h-4" />
-                <span className="text-xs">Add account</span>
-              </a>
+              {!isDemo && (
+                <a
+                  href="/login"
+                  className="w-full flex items-center gap-2.5 px-2 py-2 rounded-lg text-sm text-gray-400 hover:bg-gray-800 hover:text-gray-200 transition-colors mt-0.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span className="text-xs">Add account</span>
+                </a>
+              )}
             </>
           )}
         </div>
@@ -212,13 +221,15 @@ export function Sidebar() {
             </div>
           </button>
 
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-300 transition-colors w-full"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            Sign out
-          </button>
+          {!isDemo && (
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-300 transition-colors w-full"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Sign out
+            </button>
+          )}
           <p className="text-xs text-gray-500 text-center">Powered by Claude AI ✨</p>
           <p className="text-xs text-gray-600 text-center">Built by John Adeba</p>
         </div>

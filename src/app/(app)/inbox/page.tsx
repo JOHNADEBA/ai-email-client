@@ -11,6 +11,7 @@ import { RefreshCw, SlidersHorizontal } from 'lucide-react'
 
 export default function InboxPage() {
   const accounts = useEmailStore(s => s.accounts)
+  const isDemo = useEmailStore(s => s.isDemo)
   const activeAccountId = useEmailStore(s => s.activeAccountId)
   const threads = useEmailStore(s => s.threads)
   const selectedThreadId = useEmailStore(s => s.selectedThreadId)
@@ -132,6 +133,26 @@ export default function InboxPage() {
   const displayedThreads = sortByPriority
     ? [...threads].sort((a, b) => (b.aiPriority ?? 5) - (a.aiPriority ?? 5))
     : threads
+
+  if (!isDemo && accounts.length === 0) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-gray-50">
+        <div className="text-center max-w-sm px-6">
+          <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <span className="text-3xl">✉️</span>
+          </div>
+          <h2 className="text-lg font-semibold text-gray-800 mb-2">No accounts connected</h2>
+          <p className="text-sm text-gray-500 mb-6">Sign in with Gmail, Outlook, or IMAP to start reading your emails.</p>
+          <a
+            href="/login"
+            className="inline-block px-5 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            Sign in to get started
+          </a>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-full w-full overflow-hidden">
