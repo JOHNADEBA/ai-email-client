@@ -32,6 +32,8 @@ export function Sidebar() {
   const activeLabel = useEmailStore(s => s.activeLabel)
   const sidebarOpen = useEmailStore(s => s.sidebarOpen)
   const threads = useEmailStore(s => s.threads)
+  const isDemo = useEmailStore(s => s.isDemo)
+  const setIsDemo = useEmailStore(s => s.setIsDemo)
   const setActiveAccount = useEmailStore(s => s.setActiveAccount)
   const setActiveLabel = useEmailStore(s => s.setActiveLabel)
   const openCompose = useEmailStore(s => s.openCompose)
@@ -53,6 +55,16 @@ export function Sidebar() {
   async function handleLogout() {
     await fetch('/api/auth/logout', { method: 'POST' })
     window.location.href = '/login'
+  }
+
+  async function handleToggleDemo() {
+    if (isDemo) {
+      await fetch('/api/auth/demo/exit', { method: 'POST' })
+    } else {
+      await fetch('/api/auth/demo')
+    }
+    setIsDemo(!isDemo)
+    window.location.reload()
   }
 
   return (
@@ -181,15 +193,32 @@ export function Sidebar() {
 
         {/* Footer */}
         <div className="px-4 py-3 border-t border-gray-700 space-y-2">
-          {process.env.NEXT_PUBLIC_DEMO_MODE !== 'true' && (
-            <button
-              onClick={handleLogout}
-              className="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-300 transition-colors w-full"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              Sign out
-            </button>
-          )}
+          {/* Demo / Live toggle */}
+          <button
+            onClick={handleToggleDemo}
+            className="flex items-center justify-between w-full px-2 py-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 transition-colors"
+          >
+            <span className="text-xs text-gray-400">
+              {isDemo ? 'Demo mode' : 'Live mode'}
+            </span>
+            <div className={cn(
+              'relative w-8 h-4 rounded-full transition-colors',
+              isDemo ? 'bg-blue-500' : 'bg-gray-600'
+            )}>
+              <div className={cn(
+                'absolute top-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform',
+                isDemo ? 'translate-x-4' : 'translate-x-0.5'
+              )} />
+            </div>
+          </button>
+
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-300 transition-colors w-full"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            Sign out
+          </button>
           <p className="text-xs text-gray-500 text-center">Powered by Claude AI ✨</p>
           <p className="text-xs text-gray-600 text-center">Built by John Adeba</p>
         </div>
