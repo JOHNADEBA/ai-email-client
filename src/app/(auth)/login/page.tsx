@@ -79,7 +79,7 @@ export default function LoginPage() {
 
         {isDemoMode && (
           <a
-            href="/inbox"
+            href="/api/auth/demo"
             className="block w-full py-2.5 px-4 mb-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium text-sm rounded-xl transition-colors text-center"
           >
             Continue with Demo ↗
