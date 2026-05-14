@@ -14,6 +14,7 @@ async function graphFetch(path: string, accessToken: string, options?: RequestIn
     headers: {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
+      'Prefer': 'outlook.body-content-type="html"',
       ...options?.headers,
     },
   })
@@ -57,7 +58,7 @@ function mapMessage(msg: GraphMessage, accountId: string): Email {
     date: new Date(msg.receivedDateTime).toISOString(),
     snippet: msg.bodyPreview,
     body: msg.body?.content ?? msg.bodyPreview ?? '',
-    bodyHtml: msg.body?.contentType === 'html' ? msg.body.content : undefined,
+    bodyHtml: msg.body?.content && (msg.body.contentType?.toLowerCase() === 'html' || /<[a-z]/i.test(msg.body.content)) ? msg.body.content : undefined,
     isRead: msg.isRead,
     isStarred: msg.flag?.flagStatus === 'flagged',
     isArchived: false,
