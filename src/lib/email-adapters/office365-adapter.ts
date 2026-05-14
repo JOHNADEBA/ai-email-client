@@ -9,12 +9,13 @@ function err(code: EmailError['code'], message: string): Result<never, EmailErro
 }
 
 async function graphFetch(path: string, accessToken: string, options?: RequestInit) {
+  const isGet = !options?.method || options.method.toUpperCase() === 'GET'
   const res = await fetch(`https://graph.microsoft.com/v1.0${path}`, {
     ...options,
     headers: {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
-      'Prefer': 'outlook.body-content-type="html"',
+      ...(isGet ? { Prefer: 'outlook.body-content-type="html"' } : {}),
       ...options?.headers,
     },
   })
