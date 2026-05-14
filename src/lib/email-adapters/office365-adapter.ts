@@ -9,20 +9,20 @@ function err(code: EmailError['code'], message: string): Result<never, EmailErro
 }
 
 async function graphFetch(path: string, accessToken: string, options?: RequestInit) {
-  const isGet = !options?.method || options.method.toUpperCase() === 'GET'
+  const method = (options?.method ?? 'GET').toUpperCase()
   const res = await fetch(`https://graph.microsoft.com/v1.0${path}`, {
     ...options,
     headers: {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
-      ...(isGet ? { Prefer: 'outlook.body-content-type="html"' } : {}),
+      ...(method === 'GET' ? { Prefer: 'outlook.body-content-type="html"' } : {}),
       ...options?.headers,
     },
   })
-  const text = await res.text()
+  const text = await res.text().catch(() => '')
   if (!res.ok) throw new Error(`Graph API ${res.status}: ${text}`)
   if (!text.trim()) return {}
-  return JSON.parse(text)
+  try { return JSON.parse(text) } catch { return {} }
 }
 
 interface GraphMessage {
