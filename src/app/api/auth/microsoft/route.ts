@@ -26,6 +26,7 @@ export async function GET() {
   url.searchParams.set('scope', SCOPES)
   url.searchParams.set('response_mode', 'query')
   url.searchParams.set('state', state)
+  url.searchParams.set('prompt', 'select_account')
 
   const response = NextResponse.redirect(url.toString())
   response.cookies.set('oauth_state', state, {
