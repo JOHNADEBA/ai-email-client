@@ -166,8 +166,8 @@ export default function InboxPage() {
   function handleSelectThread(thread: EmailThread) {
     setSelectedThread(thread.id)
 
-    // Fetch full body (list view only has metadata headers, no body content)
-    const needsBody = thread.messages.every(m => !m.body)
+    // Fetch full body (list view only has metadata/preview — no bodyHtml for HTML emails)
+    const needsBody = thread.messages.every(m => !m.bodyHtml)
     if (needsBody) {
       fetch(`/api/emails/${thread.id}?accountId=${thread.accountId}`)
         .then(r => r.json())
