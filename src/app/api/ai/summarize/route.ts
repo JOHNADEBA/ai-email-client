@@ -40,9 +40,9 @@ export async function POST(request: NextRequest) {
   const { thread } = await request.json() as { thread: EmailThread }
 
   if (!process.env.ANTHROPIC_API_KEY) {
-    const preview = basicSummary(thread)
     return NextResponse.json({
-      summary: `${preview}\n\n💡 Add an ANTHROPIC_API_KEY for a proper AI summary, or try Demo mode to see it in action.`,
+      summary: basicSummary(thread),
+      hint: 'Add an ANTHROPIC_API_KEY for a proper AI summary, or switch to Demo mode to see it in action.',
     })
   }
 
