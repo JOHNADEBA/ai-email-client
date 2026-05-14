@@ -19,12 +19,10 @@ async function graphFetch(path: string, accessToken: string, options?: RequestIn
       ...options?.headers,
     },
   })
-  if (!res.ok) {
-    const body = await res.text()
-    throw new Error(`Graph API ${res.status}: ${body}`)
-  }
-  if (res.status === 204 || res.status === 202) return {}
-  return res.json()
+  const text = await res.text()
+  if (!res.ok) throw new Error(`Graph API ${res.status}: ${text}`)
+  if (!text.trim()) return {}
+  return JSON.parse(text)
 }
 
 interface GraphMessage {
