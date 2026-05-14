@@ -165,6 +165,16 @@ export default function InboxPage() {
   // ─── Actions ───────────────────────────────────────────────────────────────
   function handleSelectThread(thread: EmailThread) {
     setSelectedThread(thread.id)
+
+    // Fetch full body (list view only has metadata headers, no body content)
+    const needsBody = thread.messages.every(m => !m.body)
+    if (needsBody) {
+      fetch(`/api/emails/${thread.id}?accountId=${thread.accountId}`)
+        .then(r => r.json())
+        .then((full: EmailThread) => { if (full?.id) updateThread({ ...thread, ...full }) })
+        .catch(() => {})
+    }
+
     if (!thread.isRead) {
       updateThread({ ...thread, isRead: true })
       fetch(`/api/emails/${thread.id}`, {
