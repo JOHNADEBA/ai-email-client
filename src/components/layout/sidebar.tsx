@@ -132,7 +132,7 @@ export function Sidebar() {
                     'group w-full flex items-center gap-2.5 px-2 py-2 rounded-lg text-sm transition-colors mt-0.5',
                     activeAccountId === account.id ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-800'
                   )}
-                  onClick={() => setActiveAccount(account.id)}
+                  onClick={() => { setActiveAccount(account.id); if (sidebarOpen) toggleSidebar() }}
                 >
                   <div className={cn('w-5 h-5 rounded flex items-center justify-center text-white text-xs font-bold flex-shrink-0', providerColor(account.provider))}>
                     {providerIcon(account.provider)}
