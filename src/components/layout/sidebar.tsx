@@ -143,7 +143,7 @@ export function Sidebar() {
                   </div>
                   <button
                     onClick={(e) => handleRemoveAccount(e, account.id)}
-                    className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-500/20 text-gray-500 hover:text-red-400 transition-all flex-shrink-0"
+                    className="opacity-100 md:opacity-0 md:group-hover:opacity-100 p-1 rounded hover:bg-red-500/20 text-gray-500 hover:text-red-400 transition-all flex-shrink-0"
                     title="Remove account"
                   >
                     <Trash2 className="w-3 h-3" />
